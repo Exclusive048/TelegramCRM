@@ -1,0 +1,156 @@
+import enum
+from datetime import datetime
+
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Integer,
+    JSON,
+    String,
+    Text,
+)
+from sqlalchemy import Enum as SAEnum
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.sql import func
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+# ── Enums ───────────────────────────────────────────────────────
+
+class LeadStatus(str, enum.Enum):
+    NEW = "new"
+    IN_PROGRESS = "in_progress"
+    CLOSED = "closed"
+    REJECTED = "rejected"
+
+
+class ManagerRole(str, enum.Enum):
+    MANAGER = "manager"  # обрабатывает заявки
+    ADMIN = "admin"      # + назначает менеджеров, видит всю статистику, делает выгрузки
+
+
+def pg_enum(enum_cls: type[enum.Enum], *, name: str) -> SAEnum:
+    """
+    Postgres ENUM mapping that ALWAYS persists enum.value (not enum.name),
+    validates strings, and uses an existing PG type with fixed name.
+    """
+    return SAEnum(
+        enum_cls,
+        name=name,
+        native_enum=True,
+        validate_strings=True,
+        values_callable=lambda cls: [e.value for e in cls],
+    )
+
+
+# Reuse the same ENUM objects across all columns to avoid inconsistencies.
+LeadStatusEnum = pg_enum(LeadStatus, name="leadstatus")
+ManagerRoleEnum = pg_enum(ManagerRole, name="managerrole")
+
+
+# ── Models ──────────────────────────────────────────────────────
+
+class Manager(Base):
+    __tablename__ = "managers"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tg_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(255))
+    tg_username: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
+    role: Mapped[ManagerRole] = mapped_column(
+        ManagerRoleEnum,
+        nullable=False,
+        default=ManagerRole.MANAGER,
+        server_default=ManagerRole.MANAGER.value,
+    )
+
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    leads: Mapped[list["Lead"]] = relationship("Lead", back_populates="manager")
+
+    @property
+    def is_admin(self) -> bool:
+        return self.role == ManagerRole.ADMIN
+
+
+class Lead(Base):
+    __tablename__ = "leads"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(255))
+    phone: Mapped[str] = mapped_column(String(50))
+    source: Mapped[str] = mapped_column(String(100))
+    service: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    comment: Mapped[str] = mapped_column(Text, default="")
+    utm_campaign: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    utm_source: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    extra: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+    status: Mapped[LeadStatus] = mapped_column(
+        LeadStatusEnum,
+        nullable=False,
+        default=LeadStatus.NEW,
+        server_default=LeadStatus.NEW.value,
+    )
+
+    manager_id: Mapped[int | None] = mapped_column(ForeignKey("managers.id"), nullable=True)
+    reject_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    tg_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    tg_topic_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    manager: Mapped["Manager | None"] = relationship("Manager", back_populates="leads")
+    history: Mapped[list["LeadHistory"]] = relationship(
+        "LeadHistory",
+        back_populates="lead",
+        order_by="LeadHistory.created_at",
+    )
+    comments: Mapped[list["LeadComment"]] = relationship(
+        "LeadComment",
+        back_populates="lead",
+        order_by="LeadComment.created_at",
+    )
+
+
+class LeadHistory(Base):
+    __tablename__ = "lead_history"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    lead_id: Mapped[int] = mapped_column(ForeignKey("leads.id"))
+
+    from_status: Mapped[LeadStatus | None] = mapped_column(
+        LeadStatusEnum,
+        nullable=True,
+    )
+    to_status: Mapped[LeadStatus] = mapped_column(
+        LeadStatusEnum,
+        nullable=False,
+    )
+
+    manager_id: Mapped[int | None] = mapped_column(ForeignKey("managers.id"), nullable=True)
+    comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    lead: Mapped["Lead"] = relationship("Lead", back_populates="history")
+
+
+class LeadComment(Base):
+    __tablename__ = "lead_comments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    lead_id: Mapped[int] = mapped_column(ForeignKey("leads.id"))
+    text: Mapped[str] = mapped_column(Text)
+    author: Mapped[str] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    lead: Mapped["Lead"] = relationship("Lead", back_populates="comments")
