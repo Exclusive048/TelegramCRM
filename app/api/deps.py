@@ -11,3 +11,8 @@ async def verify_api_key(x_api_key: str = Header(...)):
 async def get_current_bot(request: Request):
     """Достаёт экземпляр бота из app.state (прокидывается при старте)"""
     return request.app.state.bot
+
+
+async def get_current_sender(request: Request):
+    """Достаёт safe sender из app.state (прокидывается при старте)"""
+    return request.app.state.sender

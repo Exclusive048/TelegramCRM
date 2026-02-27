@@ -9,12 +9,16 @@ from loguru import logger
 from app.core.config import settings
 from app.db.database import create_tables
 from app.api.routes import leads as leads_router
-from app.bot.handlers import lead_callbacks, setup, cabinet
+from app.bot.handlers import lead_callbacks, setup, cabinet, panel
+from app.bot.middlewares.sender_middleware import SenderMiddleware
+from app.services.reminder_service import ReminderService
+from app.telegram.safe_sender import TelegramSafeSender, ChatRateLimiter
 
 
-def create_app(bot: Bot) -> FastAPI:
+def create_app(bot: Bot, sender: TelegramSafeSender) -> FastAPI:
     app = FastAPI(title="CRM Bot API", version="2.0.0", docs_url="/api/docs")
     app.state.bot = bot
+    app.state.sender = sender
     app.include_router(leads_router.router, prefix="/api/v1")
 
     @app.get("/health")
@@ -36,6 +40,12 @@ async def main():
 
     bot = Bot(token=settings.bot_token, default=DefaultBotProperties(parse_mode="HTML"))
 
+    sender = TelegramSafeSender(
+        bot,
+        limiter=ChatRateLimiter(min_delay_sec=1.1),
+        max_attempts=6,
+    )
+
     # Storage: Redis если USE_REDIS=true, иначе Memory
     if settings.use_redis:
         from aiogram.fsm.storage.redis import RedisStorage
@@ -46,11 +56,16 @@ async def main():
         logger.info("FSM storage: Memory. Not recommended for production! For using Redis, set USE_REDIS=true and provide REDIS_URL in .env")
 
     dp = Dispatcher(storage=storage)
+    dp["sender"] = sender
+    dp.update.middleware(SenderMiddleware())
     dp.include_router(lead_callbacks.router)
     dp.include_router(setup.router)
     dp.include_router(cabinet.router)
+    dp.include_router(panel.router)
 
-    app = create_app(bot)
+    await ReminderService.start_scheduler(sender)
+
+    app = create_app(bot, sender)
     config = uvicorn.Config(app, host=settings.api_host, port=settings.api_port, log_level="info")
     server = uvicorn.Server(config)
 
