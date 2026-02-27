@@ -7,10 +7,11 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
 from aiogram import Bot
-from aiogram.exceptions import TelegramRetryAfter
+from aiogram.exceptions import TelegramRetryAfter, TelegramBadRequest
 from aiogram.types import CallbackQuery, Message
 from loguru import logger
 
+from app.telegram.html_utils import html_escape
 
 @dataclass(frozen=True, slots=True)
 class RateKey:
@@ -86,6 +87,27 @@ class TelegramSafeSender:
                 if attempt >= self.max_attempts:
                     raise
                 await asyncio.sleep(sleep_for)
+            except TelegramBadRequest as e:
+                msg = str(e).lower()
+                if "can't parse entities" in msg or "unsupported start tag" in msg:
+                    raw_text = None
+                    if isinstance(kwargs.get("text"), str):
+                        raw_text = kwargs.get("text")
+                    elif isinstance(kwargs.get("caption"), str):
+                        raw_text = kwargs.get("caption")
+                    snippet = ""
+                    if raw_text:
+                        snippet = raw_text.replace("\n", " ")
+                        if len(snippet) > 80:
+                            snippet = snippet[:80] + "..."
+                    logger.warning(
+                        "telegram_parse_error method={} chat_id={} thread_id={} snippet={}",
+                        method,
+                        key.chat_id,
+                        key.thread_id,
+                        snippet,
+                    )
+                raise
 
     def _rate_key(self, chat_id: int, thread_id: int | None) -> RateKey:
         return RateKey(chat_id=chat_id, thread_id=thread_id)
@@ -106,6 +128,28 @@ class TelegramSafeSender:
             chat_id=chat_id,
             text=text,
             message_thread_id=message_thread_id,
+            **kwargs,
+        )
+
+    async def send_text(
+        self,
+        chat_id: int,
+        text: str,
+        *,
+        message_thread_id: int | None = None,
+        **kwargs: Any,
+    ):
+        safe_text = html_escape(text)
+        kwargs.pop("parse_mode", None)
+        key = self._rate_key(chat_id, message_thread_id)
+        return await self._call(
+            "send_text",
+            key,
+            self.bot.send_message,
+            chat_id=chat_id,
+            text=safe_text,
+            message_thread_id=message_thread_id,
+            parse_mode=None,
             **kwargs,
         )
 
@@ -148,7 +192,50 @@ class TelegramSafeSender:
             **kwargs,
         )
 
+    async def edit_text(
+        self,
+        chat_id: int,
+        message_id: int,
+        text: str,
+        *,
+        thread_id: int | None = None,
+        **kwargs: Any,
+    ):
+        safe_text = html_escape(text)
+        kwargs.pop("parse_mode", None)
+        key = self._rate_key(chat_id, thread_id)
+        return await self._call(
+            "edit_text",
+            key,
+            self.bot.edit_message_text,
+            chat_id=chat_id,
+            message_id=message_id,
+            text=safe_text,
+            parse_mode=None,
+            **kwargs,
+        )
+
     async def edit_message_reply_markup(
+        self,
+        chat_id: int,
+        message_id: int,
+        *,
+        reply_markup: Any | None = None,
+        thread_id: int | None = None,
+        **kwargs: Any,
+    ):
+        key = self._rate_key(chat_id, thread_id)
+        return await self._call(
+            "edit_message_reply_markup",
+            key,
+            self.bot.edit_message_reply_markup,
+            chat_id=chat_id,
+            message_id=message_id,
+            reply_markup=reply_markup,
+            **kwargs,
+        )
+
+    async def delete_message(
         self,
         chat_id: int,
         message_id: int,
@@ -158,9 +245,9 @@ class TelegramSafeSender:
     ):
         key = self._rate_key(chat_id, thread_id)
         return await self._call(
-            "edit_message_reply_markup",
+            "delete_message",
             key,
-            self.bot.edit_message_reply_markup,
+            self.bot.delete_message,
             chat_id=chat_id,
             message_id=message_id,
             **kwargs,

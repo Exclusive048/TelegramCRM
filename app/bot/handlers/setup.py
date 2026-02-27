@@ -11,6 +11,7 @@ from app.db.database import AsyncSessionLocal
 from app.db.repositories.lead_repository import LeadRepository
 from app.db.models.lead import ManagerRole, LeadStatus
 from app.bot.handlers.panel import ensure_panel_message
+from app.telegram.html_utils import html_escape
 from app.telegram.safe_sender import TelegramSafeSender
 
 router = Router()
@@ -96,13 +97,13 @@ async def cmd_setup(message: Message, bot: Bot, sender: TelegramSafeSender):
 
     lines = ["<b>✅ Топики созданы!</b>\n", "Вставь в <code>.env</code>:\n<code>"]
     for _, env_key, tid in created:
-        lines.append(f"{env_key}={tid}")
+        lines.append(f"{html_escape(env_key)}={html_escape(tid)}")
     lines.append("</code>")
 
     if errors:
         lines.append("\n<b>⚠️ Ошибки:</b>")
         for name, err in errors:
-            lines.append(f"• {name}: {err}")
+            lines.append(f"• {html_escape(name)}: {html_escape(err)}")
 
     lines.append("\n<i>После обновления .env перезапусти: <code>python main.py</code></i>")
     await sender.edit_message_text(
@@ -150,11 +151,19 @@ async def cmd_add_manager(message: Message, bot: Bot, sender: TelegramSafeSender
 
         if existing:
             if existing.is_active:
-                await sender.answer(message, f"ℹ️ {target.full_name} уже является менеджером.")
+                await sender.send_text(
+                    chat_id=message.chat.id,
+                    message_thread_id=message.message_thread_id,
+                    text=f"ℹ️ {target.full_name} уже является менеджером.",
+                )
             else:
                 existing.is_active = True
                 await session.commit()
-                await sender.answer(message, f"✅ {target.full_name} восстановлен как менеджер.")
+                await sender.send_text(
+                    chat_id=message.chat.id,
+                    message_thread_id=message.message_thread_id,
+                    text=f"✅ {target.full_name} восстановлен как менеджер.",
+                )
             return
 
         await repo.create_manager(
@@ -165,10 +174,12 @@ async def cmd_add_manager(message: Message, bot: Bot, sender: TelegramSafeSender
         )
         await session.commit()
 
+    safe_name = html_escape(target.full_name)
+    safe_username = html_escape(target.username or "—")
     await sender.answer(
         message,
-        f"✅ <b>{target.full_name}</b> назначен менеджером!\n"
-        f"Username: @{target.username or '—'}\n\n"
+        f"✅ <b>{safe_name}</b> назначен менеджером!\n"
+        f"Username: @{safe_username}\n\n"
         f"Чтобы дать права администратора — ответьте на его сообщение: /make_admin",
         parse_mode="HTML",
     )
@@ -204,9 +215,10 @@ async def cmd_make_admin(message: Message, bot: Bot, sender: TelegramSafeSender)
             )
         await session.commit()
 
+    safe_name = html_escape(target.full_name)
     await sender.answer(
         message,
-        f"👑 <b>{target.full_name}</b> теперь CRM-администратор.\n"
+        f"👑 <b>{safe_name}</b> теперь CRM-администратор.\n"
         f"Может назначать менеджеров, делать выгрузки и смотреть статистику.",
         parse_mode="HTML",
     )
@@ -235,9 +247,17 @@ async def cmd_remove_manager(message: Message, bot: Bot, sender: TelegramSafeSen
         await session.commit()
 
     if ok:
-        await sender.answer(message, f"✅ {target.full_name} удалён из менеджеров.")
+        await sender.send_text(
+            chat_id=message.chat.id,
+            message_thread_id=message.message_thread_id,
+            text=f"✅ {target.full_name} удалён из менеджеров.",
+        )
     else:
-        await sender.answer(message, f"ℹ️ {target.full_name} не найден в списке менеджеров.")
+        await sender.send_text(
+            chat_id=message.chat.id,
+            message_thread_id=message.message_thread_id,
+            text=f"ℹ️ {target.full_name} не найден в списке менеджеров.",
+        )
 
 
 # ── /managers ─────────────────────────────────────────
@@ -264,7 +284,9 @@ async def cmd_managers(message: Message, bot: Bot, sender: TelegramSafeSender):
         icon = "👑" if m.is_admin else "👤"
         role = "Администратор" if m.is_admin else "Менеджер"
         username = f"@{m.tg_username}" if m.tg_username else "—"
-        lines.append(f"{icon} <b>{m.name}</b> ({role})  {username}")
+        safe_name = html_escape(m.name)
+        safe_username = html_escape(username)
+        lines.append(f"{icon} <b>{safe_name}</b> ({role})  {safe_username}")
 
     lines.append(
         "\n<i>/add_manager — добавить (ответом на сообщение)\n"

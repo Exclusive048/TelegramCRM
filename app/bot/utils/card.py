@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import html
 from datetime import datetime
 
 from app.db.models.lead import Lead, LeadStatus
+from app.telegram.html_utils import html_escape
 
 
 def _fmt_date(value: datetime | None, fmt: str) -> str:
@@ -27,9 +27,9 @@ def format_lead_card(lead: Lead) -> str:
     """
     Формат карточки для Telegram (HTML).
     """
-    name = html.escape(lead.name or "—")
-    phone = html.escape(lead.phone or "—")
-    email = html.escape(lead.email or "—")
+    name = html_escape(lead.name or "—")
+    phone = html_escape(lead.phone or "—")
+    email = html_escape(lead.email or "—")
     source_label = {
         "tg_bot": "Telegram Bot",
         "website": "Сайт",
@@ -37,10 +37,10 @@ def format_lead_card(lead: Lead) -> str:
         "tilda": "Tilda",
         "manual": "Ручной ввод",
     }.get(lead.source, lead.source or "—")
-    source_label = html.escape(source_label)
+    source_label = html_escape(source_label)
 
     created_at = _fmt_date(lead.created_at, "%d.%m.%y")
-    comment = html.escape(lead.comment or "—")
+    comment = html_escape(lead.comment or "—")
 
     lines = [
         f"📋 Заявка #{lead.id}",
@@ -52,7 +52,7 @@ def format_lead_card(lead: Lead) -> str:
     ]
 
     if lead.manager:
-        lines.append(f"👨‍💼 Ответственный: {html.escape(lead.manager.name)}")
+        lines.append(f"👨‍💼 Ответственный: {html_escape(lead.manager.name)}")
 
     if lead.amount is not None:
         lines.append(f"💰 Сумма: {lead.amount} руб.")
@@ -61,7 +61,7 @@ def format_lead_card(lead: Lead) -> str:
         lines.append(f"📅 Дата закрытия: {_fmt_date(lead.closed_at, '%d.%m.%y')}")
 
     if lead.status == LeadStatus.REJECTED:
-        reason = html.escape(lead.reject_reason or "—")
+        reason = html_escape(lead.reject_reason or "—")
         lines.append(f"❌ Причина: {reason}")
 
     lines.append(f"💬 Комментарий: {comment}")
@@ -70,8 +70,8 @@ def format_lead_card(lead: Lead) -> str:
         lines.append("📝 Заметки:")
         for c in lead.comments:
             ts = _fmt_date(c.created_at, "%d.%m %H:%M")
-            author = html.escape(c.author or "—")
-            text = html.escape(c.text or "")
+            author = html_escape(c.author or "—")
+            text = html_escape(c.text or "")
             lines.append(f"• {author} [{ts}]: {text}")
 
     return "\n".join(lines)

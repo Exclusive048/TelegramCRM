@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 
 from aiogram import Router, F, Bot
 from aiogram.filters import Command
-from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, BufferedInputFile
+from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, BufferedInputFile, FSInputFile
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from app.core.config import settings
@@ -14,6 +14,7 @@ from app.core.permissions import is_crm_admin
 from app.db.database import AsyncSessionLocal
 from app.db.repositories.lead_repository import LeadRepository
 from app.db.models.lead import LeadStatus
+from app.telegram.html_utils import html_escape
 from app.telegram.safe_sender import TelegramSafeSender
 
 router = Router()
@@ -98,7 +99,7 @@ async def cab_back(callback: CallbackQuery, bot: Bot, sender: TelegramSafeSender
     await sender.edit_message_text(
         chat_id=callback.message.chat.id,
         message_id=callback.message.message_id,
-        "🗂 <b>Кабинет</b>\n\nВыберите раздел:",
+        text="🗂 <b>Кабинет</b>\n\nВыберите раздел:",
         reply_markup=_main_keyboard().as_markup(),
         parse_mode="HTML",
         thread_id=callback.message.message_thread_id,
@@ -117,7 +118,7 @@ async def cab_export_menu(callback: CallbackQuery, bot: Bot, sender: TelegramSaf
     await sender.edit_message_text(
         chat_id=callback.message.chat.id,
         message_id=callback.message.message_id,
-        "📤 <b>Экспорт клиентов</b>\nВыберите этап:",
+        text="📤 <b>Экспорт клиентов</b>\nВыберите этап:",
         reply_markup=_stage_keyboard("cab:export_stage").as_markup(),
         parse_mode="HTML",
         thread_id=callback.message.message_thread_id,
@@ -134,7 +135,7 @@ async def cab_export_period(callback: CallbackQuery, bot: Bot, sender: TelegramS
     await sender.edit_message_text(
         chat_id=callback.message.chat.id,
         message_id=callback.message.message_id,
-        "📅 <b>Выберите период</b>:",
+        text="📅 <b>Выберите период</b>:",
         reply_markup=_period_keyboard(f"cab:export_do:{stage}").as_markup(),
         parse_mode="HTML",
         thread_id=callback.message.message_thread_id,
@@ -226,7 +227,7 @@ async def cab_export_do(callback: CallbackQuery, bot: Bot, sender: TelegramSafeS
         message_thread_id=callback.message.message_thread_id,
         document=BufferedInputFile(buffer.read(), filename=filename),
         caption=f"📤 Экспорт: {total} заявок\nФайл: {filename}",
-    )
+        parse_mode=None,
     )
 
 
@@ -248,7 +249,7 @@ async def cab_analytics(callback: CallbackQuery, bot: Bot, sender: TelegramSafeS
     await sender.edit_message_text(
         chat_id=callback.message.chat.id,
         message_id=callback.message.message_id,
-        "📊 <b>Аналитика</b>\nВыберите режим:",
+        text="📊 <b>Аналитика</b>\nВыберите режим:",
         reply_markup=builder.as_markup(),
         parse_mode="HTML",
         thread_id=callback.message.message_thread_id,
@@ -264,7 +265,7 @@ async def cab_analytics_conversion(callback: CallbackQuery, bot: Bot, sender: Te
     await sender.edit_message_text(
         chat_id=callback.message.chat.id,
         message_id=callback.message.message_id,
-        "📈 <b>Конверсия</b>\nВыберите период:",
+        text="📈 <b>Конверсия</b>\nВыберите период:",
         reply_markup=_period_keyboard("cab:analytics_conversion").as_markup(),
         parse_mode="HTML",
         thread_id=callback.message.message_thread_id,
@@ -298,11 +299,10 @@ async def cab_analytics_conversion_period(callback: CallbackQuery, bot: Bot, sen
         f"Отклонено: {s.get('rejected', 0)} ({_pct(s.get('rejected', 0), total)})",
     ]
 
-    await sender.edit_message_text(
+    await sender.edit_text(
         chat_id=callback.message.chat.id,
         message_id=callback.message.message_id,
         text="\n".join(lines),
-        parse_mode="HTML",
         thread_id=callback.message.message_thread_id,
     )
 
@@ -316,7 +316,7 @@ async def cab_analytics_activity(callback: CallbackQuery, bot: Bot, sender: Tele
     await sender.edit_message_text(
         chat_id=callback.message.chat.id,
         message_id=callback.message.message_id,
-        "👥 <b>Работа с заявками</b>\nВыберите период:",
+        text="👥 <b>Работа с заявками</b>\nВыберите период:",
         reply_markup=_period_keyboard("cab:analytics_activity").as_markup(),
         parse_mode="HTML",
         thread_id=callback.message.message_thread_id,
@@ -342,7 +342,7 @@ async def cab_analytics_activity_period(callback: CallbackQuery, bot: Bot, sende
     await sender.edit_message_text(
         chat_id=callback.message.chat.id,
         message_id=callback.message.message_id,
-        "Выберите сотрудника:",
+        text="Выберите сотрудника:",
         reply_markup=builder.as_markup(),
         parse_mode="HTML",
         thread_id=callback.message.message_thread_id,
@@ -376,11 +376,10 @@ async def cab_analytics_activity_run(callback: CallbackQuery, bot: Bot, sender: 
         f"Отклонено: {s.get('rejected', 0)} ({_pct(s.get('rejected', 0), total)})",
     ]
 
-    await sender.edit_message_text(
+    await sender.edit_text(
         chat_id=callback.message.chat.id,
         message_id=callback.message.message_id,
         text="\n".join(lines),
-        parse_mode="HTML",
         thread_id=callback.message.message_thread_id,
     )
 
@@ -400,12 +399,16 @@ async def cab_integrations(callback: CallbackQuery, bot: Bot, sender: TelegramSa
         await sender.answer(callback, "⛔️ Нет доступа", show_alert=True)
         return
     await sender.answer(callback)
-    url = "https://<domain>/api/v1/leads/tilda"
+    raw_domain = (settings.public_domain or "YOUR_DOMAIN").strip()
+    domain = raw_domain.replace("https://", "").replace("http://", "").strip("/") or "YOUR_DOMAIN"
+    url = f"https://{domain}/api/v1/leads/tilda"
+    escaped_url = html_escape(url)
+    escaped_key = html_escape(settings.api_secret_key)
     text = (
         "🔗 <b>Webhook для Tilda</b>\n"
-        f"POST {url}\n"
-        f"X-API-Key: {settings.api_secret_key}\n"
-        "📋 JS-сниппет: /integrations/tilda_snippet.js"
+        f"POST {escaped_url}\n"
+        f"X-API-Key: {escaped_key}\n"
+        "📋 JS-сниппет отправлен файлом"
     )
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text="📋 Скопировать URL", callback_data="cab:copy_webhook"))
@@ -418,6 +421,21 @@ async def cab_integrations(callback: CallbackQuery, bot: Bot, sender: TelegramSa
         parse_mode="HTML",
         thread_id=callback.message.message_thread_id,
     )
+    try:
+        snippet = FSInputFile("integrations/tilda_snippet.js")
+        await sender.send_document(
+            chat_id=callback.message.chat.id,
+            message_thread_id=callback.message.message_thread_id,
+            document=snippet,
+            caption="JS-сниппет для Tilda",
+            parse_mode=None,
+        )
+    except Exception:
+        await sender.send_text(
+            chat_id=callback.message.chat.id,
+            message_thread_id=callback.message.message_thread_id,
+            text="Не удалось отправить файл JS-сниппета. Проверьте integrations/tilda_snippet.js",
+        )
 
 
 @router.callback_query(F.data == "cab:copy_webhook")
@@ -426,7 +444,14 @@ async def cab_copy_webhook(callback: CallbackQuery, bot: Bot, sender: TelegramSa
         await sender.answer(callback)
         return
     await sender.answer(callback)
-    await sender.answer(callback.message, "https://<domain>/api/v1/leads/tilda")
+    raw_domain = (settings.public_domain or "YOUR_DOMAIN").strip()
+    domain = raw_domain.replace("https://", "").replace("http://", "").strip("/") or "YOUR_DOMAIN"
+    url = f"https://{domain}/api/v1/leads/tilda"
+    await sender.send_text(
+        chat_id=callback.message.chat.id,
+        message_thread_id=callback.message.message_thread_id,
+        text=url,
+    )
 
 
 # ── Тариф ────────────────────────────────────────────
@@ -441,9 +466,7 @@ async def cab_tariff(callback: CallbackQuery, bot: Bot, sender: TelegramSafeSend
     await sender.edit_message_text(
         chat_id=callback.message.chat.id,
         message_id=callback.message.message_id,
-        "💳 Текущий тариф: Базовый\n"
-        "Заявок в месяц: без ограничений\n"
-        "Поддержка: @support_username",
+        text='💳 Текущий тариф: Базовый\nЗаявок в месяц: без ограничений\nПоддержка: @support_username',
         reply_markup=InlineKeyboardBuilder().row(
             InlineKeyboardButton(text="⬅️ Назад", callback_data="cab:back")
         ).as_markup(),

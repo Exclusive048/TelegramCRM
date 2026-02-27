@@ -10,6 +10,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from loguru import logger
 
 from app.bot.keyboards.lead_keyboards import make_reject_reason_keyboard, make_reminder_keyboard
+from app.bot.utils.menu_cleanup import cleanup_inline_menu, cleanup_inline_menu_by_id
 from app.bot.ui.message_ref import MessageRef
 from app.core.config import settings
 from app.db.database import AsyncSessionLocal
@@ -241,10 +242,15 @@ async def handle_lead_action(callback: CallbackQuery, state: FSMContext, sender:
                 await sender.answer(callback, NO_ACCESS_TEXT, show_alert=True)
                 return
             await sender.answer(callback)
-            await sender.reply(
+            menu_msg = await sender.reply(
                 callback.message,
                 "Когда напомнить?",
                 reply_markup=make_reminder_keyboard(lead_id),
+            )
+            await state.update_data(
+                reminder_menu_chat_id=menu_msg.chat.id,
+                reminder_menu_id=menu_msg.message_id,
+                reminder_menu_thread_id=menu_msg.message_thread_id,
             )
             return
 
@@ -259,7 +265,12 @@ async def handle_lead_action(callback: CallbackQuery, state: FSMContext, sender:
             choice = parts[3]
             if choice == "custom":
                 await state.set_state(ReminderState.waiting_for_custom_time)
-                await state.update_data(lead_id=lead_id)
+                await state.update_data(
+                    lead_id=lead_id,
+                    reminder_menu_chat_id=callback.message.chat.id if callback.message else None,
+                    reminder_menu_id=callback.message.message_id if callback.message else None,
+                    reminder_menu_thread_id=callback.message.message_thread_id if callback.message else None,
+                )
                 await sender.answer(callback)
                 await sender.reply(callback.message, "Введите дату и время (ДД.ММ.ГГГГ ЧЧ:ММ):")
                 return
@@ -282,7 +293,8 @@ async def handle_lead_action(callback: CallbackQuery, state: FSMContext, sender:
             )
             await session.commit()
             if reminder:
-                await sender.answer(callback, "🔔 Напоминание установлено")
+                await sender.answer(callback, "Напоминание установлено ✅")
+                await cleanup_inline_menu(callback, sender)
             else:
                 await sender.answer(callback, "⚠️ Не удалось поставить напоминание.", show_alert=True)
             return
@@ -427,6 +439,9 @@ async def handle_custom_reminder_time(message: Message, state: FSMContext, sende
 
     data = await state.get_data()
     lead_id = data.get("lead_id")
+    menu_chat_id = data.get("reminder_menu_chat_id")
+    menu_message_id = data.get("reminder_menu_id")
+    menu_thread_id = data.get("reminder_menu_thread_id")
     if not lead_id:
         await state.clear()
         return
@@ -450,7 +465,12 @@ async def handle_custom_reminder_time(message: Message, state: FSMContext, sende
         )
         await session.commit()
         if reminder:
-            await sender.reply(message, "🔔 Напоминание установлено.")
+            await cleanup_inline_menu_by_id(
+                sender,
+                chat_id=menu_chat_id,
+                message_id=menu_message_id,
+                thread_id=menu_thread_id,
+            )
         else:
             await sender.reply(message, "⚠️ Не удалось поставить напоминание.")
 
@@ -629,7 +649,12 @@ async def handle_create_lead_comment(message: Message, state: FSMContext, sender
         lead = await service.create_lead(payload)
         await session.commit()
 
-    await sender.reply(message, f"✅ Заявка #{lead.id} создана.")
+    await sender.send_text(
+        chat_id=message.chat.id,
+        message_thread_id=message.message_thread_id,
+        text=f"✅ Заявка #{lead.id} создана.",
+        reply_to_message_id=message.message_id,
+    )
     await state.clear()
 
 
@@ -679,4 +704,9 @@ async def handle_menu_period(callback: CallbackQuery, sender: TelegramSafeSender
 
     period_label = {"today": "сегодня", "week": "за неделю", "month": "за месяц"}[period]
     await sender.answer(callback)
-    await sender.reply(callback.message, f"Заявок {period_label}: {count}")
+    await sender.send_text(
+        chat_id=callback.message.chat.id,
+        message_thread_id=callback.message.message_thread_id,
+        text=f"Заявок {period_label}: {count}",
+        reply_to_message_id=callback.message.message_id,
+    )

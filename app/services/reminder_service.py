@@ -63,11 +63,10 @@ async def _send_reminder_job(reminder_id: int, sender: TelegramSafeSender):
         if link:
             lines.append(f"Ссылка: {link}")
 
-        await sender.send_message(
+        await sender.send_text(
             chat_id=settings.crm_group_id,
             message_thread_id=settings.topic_reminders,
             text="\n".join(lines),
-            parse_mode="HTML",
         )
         await repo.mark_reminder_sent(reminder_id)
         await session.commit()
