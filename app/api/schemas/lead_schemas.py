@@ -7,9 +7,11 @@ from app.db.models.lead import LeadStatus
 class LeadCreateRequest(BaseModel):
     name:         str              = Field(..., min_length=1, max_length=255)
     phone:        str              = Field(..., min_length=5, max_length=50)
+    email:        str | None       = None
     source:       str              = Field(..., description="tg_bot | website | landing | tilda | manual")
     comment:      str              = Field(..., min_length=1, description="Обязательный комментарий")
     service:      str | None       = None
+    amount:       float | None     = None
     utm_campaign: str | None       = None
     utm_source:   str | None       = None
     manager_id:   int | None       = None
@@ -28,6 +30,8 @@ class LeadUpdateRequest(BaseModel):
     manager_id:    int | None        = None
     reject_reason: str | None        = None
     service:       str | None        = None
+    email:         str | None        = None
+    amount:        float | None      = None
     extra:         dict[str, Any] | None = None
 
 
@@ -40,9 +44,11 @@ class LeadResponse(BaseModel):
     id:           int
     name:         str
     phone:        str
+    email:        str | None
     source:       str
     service:      str | None
     comment:      str
+    amount:       float | None
     status:       LeadStatus
     manager_id:   int | None
     utm_campaign: str | None
@@ -50,6 +56,7 @@ class LeadResponse(BaseModel):
     extra:        dict | None
     created_at:   datetime
     updated_at:   datetime
+    closed_at:    datetime | None
     model_config = {"from_attributes": True}
 
 

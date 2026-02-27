@@ -10,7 +10,7 @@ from app.api.schemas.lead_schemas import (
     LeadResponse, LeadListResponse, CreateLeadResponse, OkResponse,
     TildaWebhookRequest,
 )
-from app.api.deps import verify_api_key, get_current_bot
+from app.api.deps import verify_api_key, get_current_sender
 from app.services.lead_service import LeadService
 
 router = APIRouter(prefix="/leads", tags=["Leads"])
@@ -23,10 +23,10 @@ async def create_lead(
     body: LeadCreateRequest,
     db: AsyncSession = Depends(get_db),
     _: None = Depends(verify_api_key),
-    bot=Depends(get_current_bot),
+    sender=Depends(get_current_sender),
 ):
     repo = LeadRepository(db)
-    service = LeadService(repo, bot)
+    service = LeadService(repo, sender)
     lead = await service.create_lead(body.model_dump(exclude_none=True))
     return CreateLeadResponse(lead_id=lead.id, tg_message_id=lead.tg_message_id)
 
@@ -38,7 +38,7 @@ async def tilda_webhook(
     request: Request,
     db: AsyncSession = Depends(get_db),
     _: None = Depends(verify_api_key),
-    bot=Depends(get_current_bot),
+    sender=Depends(get_current_sender),
 ):
     """
     Webhook для Tilda.
@@ -62,7 +62,7 @@ async def tilda_webhook(
     }
 
     repo = LeadRepository(db)
-    service = LeadService(repo, bot)
+    service = LeadService(repo, sender)
     lead = await service.create_lead({k: v for k, v in lead_data.items() if v is not None})
     return OkResponse()
 
@@ -117,20 +117,22 @@ async def update_lead(
     body: LeadUpdateRequest,
     db: AsyncSession = Depends(get_db),
     _: None = Depends(verify_api_key),
-    bot=Depends(get_current_bot),
+    sender=Depends(get_current_sender),
 ):
     repo = LeadRepository(db)
     lead = await repo.get_by_id(lead_id)
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
     if body.status:
-        service = LeadService(repo, bot)
+        service = LeadService(repo, sender)
         if body.status == LeadStatus.IN_PROGRESS:
-            await service.take_in_progress(lead_id, 0)
-        elif body.status == LeadStatus.CLOSED:
-            await service.close_lead(lead_id, 0)
+            await service.take_in_progress(lead_id, 0, None)
+        elif body.status == LeadStatus.PAID:
+            await service.mark_paid(lead_id, 0, body.amount, None)
+        elif body.status == LeadStatus.SUCCESS:
+            await service.mark_success(lead_id, 0, None)
         elif body.status == LeadStatus.REJECTED:
-            await service.reject_lead(lead_id, 0, body.reject_reason or "")
+            await service.reject_lead(lead_id, 0, body.reject_reason or "", None)
     return OkResponse()
 
 
@@ -142,13 +144,17 @@ async def add_comment(
     body: LeadCommentRequest,
     db: AsyncSession = Depends(get_db),
     _: None = Depends(verify_api_key),
-    bot=Depends(get_current_bot),
+    sender=Depends(get_current_sender),
 ):
     repo = LeadRepository(db)
     lead = await repo.get_by_id(lead_id)
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
-    await repo.add_comment(lead_id=lead_id, text=body.text, author=body.author)
-    service = LeadService(repo, bot)
-    await service.refresh_card(lead_id)
+    service = LeadService(repo, sender)
+    await service.add_comment(
+        lead_id=lead_id,
+        text=body.text,
+        author=body.author,
+        target_ref=None,
+    )
     return OkResponse()

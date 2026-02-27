@@ -1,21 +1,20 @@
 """
-/cabinet — кабинет выгрузок и управления.
+/cabinet — кабинет администрирования.
 Доступен только CRM-администраторам.
 """
 from datetime import datetime, timedelta
+
 from aiogram import Router, F, Bot
 from aiogram.filters import Command
-from aiogram.types import Message, CallbackQuery, InlineKeyboardButton
+from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, BufferedInputFile
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
-from loguru import logger
 
 from app.core.config import settings
 from app.core.permissions import is_crm_admin
 from app.db.database import AsyncSessionLocal
 from app.db.repositories.lead_repository import LeadRepository
 from app.db.models.lead import LeadStatus
+from app.telegram.safe_sender import TelegramSafeSender
 
 router = Router()
 
@@ -26,168 +25,145 @@ async def _check_admin(bot: Bot, user_id: int) -> bool:
         return await is_crm_admin(bot, repo, settings.crm_group_id, user_id)
 
 
-def _cabinet_keyboard() -> InlineKeyboardBuilder:
+def _main_keyboard() -> InlineKeyboardBuilder:
     builder = InlineKeyboardBuilder()
     builder.row(
-        InlineKeyboardButton(text="📊 Статистика",     callback_data="cab:stats"),
-        InlineKeyboardButton(text="📥 Выгрузка Excel", callback_data="cab:export_menu"),
+        InlineKeyboardButton(text="📤 Экспорт клиентов", callback_data="cab:export"),
+        InlineKeyboardButton(text="📊 Аналитика", callback_data="cab:analytics"),
     )
     builder.row(
-        InlineKeyboardButton(text="📧 Отправить на email", callback_data="cab:email_menu"),
-        InlineKeyboardButton(text="👥 Менеджеры",          callback_data="cab:managers"),
+        InlineKeyboardButton(text="🔗 Интеграции", callback_data="cab:integrations"),
+        InlineKeyboardButton(text="💳 Тариф", callback_data="cab:tariff"),
     )
     return builder
 
 
-# ── /cabinet ──────────────────────────────────────────
+def _stage_keyboard(prefix: str) -> InlineKeyboardBuilder:
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="Лиды", callback_data=f"{prefix}:new"),
+        InlineKeyboardButton(text="В работе", callback_data=f"{prefix}:in_progress"),
+    )
+    builder.row(
+        InlineKeyboardButton(text="Оплачено", callback_data=f"{prefix}:paid"),
+        InlineKeyboardButton(text="Успех", callback_data=f"{prefix}:success"),
+    )
+    builder.row(
+        InlineKeyboardButton(text="Отклонено", callback_data=f"{prefix}:rejected"),
+    )
+    builder.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="cab:back"))
+    return builder
+
+
+def _period_keyboard(prefix: str) -> InlineKeyboardBuilder:
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="Сегодня", callback_data=f"{prefix}:today"),
+        InlineKeyboardButton(text="Неделя", callback_data=f"{prefix}:week"),
+        InlineKeyboardButton(text="Месяц", callback_data=f"{prefix}:month"),
+    )
+    builder.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="cab:back"))
+    return builder
+
+
+def _period_dates(period: str) -> tuple[datetime, datetime]:
+    now = datetime.now()
+    if period == "today":
+        return now.replace(hour=0, minute=0, second=0, microsecond=0), now
+    if period == "week":
+        return now - timedelta(days=7), now
+    return now - timedelta(days=30), now
+
 
 @router.message(Command("cabinet"))
-async def cmd_cabinet(message: Message, bot: Bot):
+async def cmd_cabinet(message: Message, bot: Bot, sender: TelegramSafeSender):
     if not await _check_admin(bot, message.from_user.id):
-        await message.answer("⛔️ Кабинет доступен только CRM-администраторам.")
+        await sender.answer(message, "⛔️ Кабинет доступен только CRM-администраторам.")
         return
 
-    builder = _cabinet_keyboard()
-    await message.answer(
-        "🗂 <b>Кабинет управления</b>\n\nВыберите действие:",
-        reply_markup=builder.as_markup(),
+    await sender.answer(
+        message,
+        "🗂 <b>Кабинет</b>\n\nВыберите раздел:",
+        reply_markup=_main_keyboard().as_markup(),
         parse_mode="HTML",
     )
 
 
-# ── Статистика ────────────────────────────────────────
-
-@router.callback_query(F.data == "cab:stats")
-async def cab_stats(callback: CallbackQuery, bot: Bot):
+@router.callback_query(F.data == "cab:back")
+async def cab_back(callback: CallbackQuery, bot: Bot, sender: TelegramSafeSender):
     if not await _check_admin(bot, callback.from_user.id):
-        await callback.answer("⛔️ Нет доступа", show_alert=True)
+        await sender.answer(callback)
         return
-    await callback.answer()
-
-    builder = InlineKeyboardBuilder()
-    builder.row(
-        InlineKeyboardButton(text="Сегодня",   callback_data="stats:today"),
-        InlineKeyboardButton(text="Неделя",    callback_data="stats:week"),
-        InlineKeyboardButton(text="Месяц",     callback_data="stats:month"),
-    )
-    builder.row(InlineKeyboardButton(text="◀️ Назад", callback_data="cab:back"))
-    await callback.message.edit_text(
-        "📊 <b>Статистика</b>\nВыберите период:",
-        reply_markup=builder.as_markup(),
+    await sender.answer(callback)
+    await sender.edit_message_text(
+        chat_id=callback.message.chat.id,
+        message_id=callback.message.message_id,
+        "🗂 <b>Кабинет</b>\n\nВыберите раздел:",
+        reply_markup=_main_keyboard().as_markup(),
         parse_mode="HTML",
+        thread_id=callback.message.message_thread_id,
     )
 
 
-@router.callback_query(F.data.startswith("stats:"))
-async def cab_stats_period(callback: CallbackQuery, bot: Bot):
-    if not await _check_admin(bot, callback.from_user.id):
-        await callback.answer("⛔️ Нет доступа", show_alert=True)
-        return
-    await callback.answer()
+# ── Экспорт ──────────────────────────────────────────
 
-    period = callback.data.split(":")[1]
-    now = datetime.utcnow()
-    date_from = {
-        "today": now.replace(hour=0, minute=0, second=0),
-        "week":  now - timedelta(days=7),
-        "month": now - timedelta(days=30),
-    }.get(period)
+
+@router.callback_query(F.data == "cab:export")
+async def cab_export_menu(callback: CallbackQuery, bot: Bot, sender: TelegramSafeSender):
+    if not await _check_admin(bot, callback.from_user.id):
+        await sender.answer(callback, "⛔️ Нет доступа", show_alert=True)
+        return
+    await sender.answer(callback)
+    await sender.edit_message_text(
+        chat_id=callback.message.chat.id,
+        message_id=callback.message.message_id,
+        "📤 <b>Экспорт клиентов</b>\nВыберите этап:",
+        reply_markup=_stage_keyboard("cab:export_stage").as_markup(),
+        parse_mode="HTML",
+        thread_id=callback.message.message_thread_id,
+    )
+
+
+@router.callback_query(F.data.startswith("cab:export_stage:"))
+async def cab_export_period(callback: CallbackQuery, bot: Bot, sender: TelegramSafeSender):
+    if not await _check_admin(bot, callback.from_user.id):
+        await sender.answer(callback, "⛔️ Нет доступа", show_alert=True)
+        return
+    await sender.answer(callback)
+    stage = callback.data.split(":")[2]
+    await sender.edit_message_text(
+        chat_id=callback.message.chat.id,
+        message_id=callback.message.message_id,
+        "📅 <b>Выберите период</b>:",
+        reply_markup=_period_keyboard(f"cab:export_do:{stage}").as_markup(),
+        parse_mode="HTML",
+        thread_id=callback.message.message_thread_id,
+    )
+
+
+@router.callback_query(F.data.startswith("cab:export_do:"))
+async def cab_export_do(callback: CallbackQuery, bot: Bot, sender: TelegramSafeSender):
+    if not await _check_admin(bot, callback.from_user.id):
+        await sender.answer(callback, "⛔️ Нет доступа", show_alert=True)
+        return
+    parts = callback.data.split(":")
+    if len(parts) < 4:
+        await sender.answer(callback)
+        return
+    stage = parts[2]
+    period = parts[3]
+    date_from, date_to = _period_dates(period)
+
+    status = LeadStatus(stage)
 
     async with AsyncSessionLocal() as session:
         repo = LeadRepository(session)
-        stats = await repo.get_stats(date_from=date_from)
-
-    period_label = {"today": "Сегодня", "week": "7 дней", "month": "30 дней"}[period]
-    s = stats["by_status"]
-
-    lines = [
-        f"📊 <b>Статистика — {period_label}</b>",
-        "",
-        f"📋 Всего заявок:      <b>{stats['total']}</b>",
-        f"📥 Новые:             <b>{s.get('new', 0)}</b>",
-        f"🔄 В обработке:       <b>{s.get('in_progress', 0)}</b>",
-        f"✅ Закрытые:          <b>{s.get('closed', 0)}</b>",
-        f"❌ Отклонённые:       <b>{s.get('rejected', 0)}</b>",
-        f"\n🎯 Конверсия:         <b>{stats['conversion']}%</b>",
-    ]
-
-    if stats["by_source"]:
-        lines.append("\n<b>По источникам:</b>")
-        for src, cnt in sorted(stats["by_source"].items(), key=lambda x: -x[1]):
-            lines.append(f"  • {src}: {cnt}")
-
-    builder = InlineKeyboardBuilder()
-    builder.row(
-        InlineKeyboardButton(text="Сегодня", callback_data="stats:today"),
-        InlineKeyboardButton(text="Неделя",  callback_data="stats:week"),
-        InlineKeyboardButton(text="Месяц",   callback_data="stats:month"),
-    )
-    builder.row(InlineKeyboardButton(text="◀️ Назад", callback_data="cab:back"))
-
-    await callback.message.edit_text(
-        "\n".join(lines),
-        reply_markup=builder.as_markup(),
-        parse_mode="HTML",
-    )
-
-
-# ── Меню выгрузки ─────────────────────────────────────
-
-@router.callback_query(F.data == "cab:export_menu")
-async def cab_export_menu(callback: CallbackQuery, bot: Bot):
-    if not await _check_admin(bot, callback.from_user.id):
-        await callback.answer("⛔️ Нет доступа", show_alert=True)
-        return
-    await callback.answer()
-
-    builder = InlineKeyboardBuilder()
-    builder.row(
-        InlineKeyboardButton(text="📥 Все заявки",       callback_data="export:all:all"),
-        InlineKeyboardButton(text="✅ Закрытые",          callback_data="export:closed:all"),
-    )
-    builder.row(
-        InlineKeyboardButton(text="🔄 В обработке",      callback_data="export:in_progress:all"),
-        InlineKeyboardButton(text="❌ Отклонённые",      callback_data="export:rejected:all"),
-    )
-    builder.row(
-        InlineKeyboardButton(text="📅 За сегодня",       callback_data="export:all:today"),
-        InlineKeyboardButton(text="📅 За неделю",        callback_data="export:all:week"),
-        InlineKeyboardButton(text="📅 За месяц",         callback_data="export:all:month"),
-    )
-    builder.row(InlineKeyboardButton(text="◀️ Назад", callback_data="cab:back"))
-
-    await callback.message.edit_text(
-        "📥 <b>Выгрузка в Excel</b>\n\nВыберите что выгружать:",
-        reply_markup=builder.as_markup(),
-        parse_mode="HTML",
-    )
-
-
-@router.callback_query(F.data.startswith("export:"))
-async def cab_do_export(callback: CallbackQuery, bot: Bot):
-    if not await _check_admin(bot, callback.from_user.id):
-        await callback.answer("⛔️ Нет доступа", show_alert=True)
-        return
-    await callback.answer("⏳ Формирую файл...")
-
-    _, status_str, period = callback.data.split(":")
-    status = None if status_str == "all" else LeadStatus(status_str)
-
-    now = datetime.utcnow()
-    date_from = {"today": now.replace(hour=0, minute=0, second=0),
-                 "week":  now - timedelta(days=7),
-                 "month": now - timedelta(days=30),
-                 "all":   None}.get(period)
-
-    async with AsyncSessionLocal() as session:
-        repo = LeadRepository(session)
-        leads, total = await repo.get_list(status=status, date_from=date_from, per_page=10000)
+        leads, total = await repo.get_list(status=status, date_from=date_from, date_to=date_to, per_page=10000)
 
     if not leads:
-        await callback.message.answer("📭 Нет заявок по выбранным фильтрам.")
+        await sender.answer(callback.message, "Нет заявок по выбранному фильтру.")
         return
 
-    # Генерируем Excel
     import io
     import openpyxl
     from openpyxl.styles import Font, PatternFill, Alignment
@@ -196,7 +172,10 @@ async def cab_do_export(callback: CallbackQuery, bot: Bot):
     ws = wb.active
     ws.title = "Заявки"
 
-    headers = ["ID", "Имя", "Телефон", "Источник", "Услуга", "Комментарий", "Статус", "Менеджер", "UTM", "Дата"]
+    headers = [
+        "ID", "Имя", "Телефон", "Почта", "Источник", "Услуга", "Сумма",
+        "Статус", "Ответственный", "Комментарий", "UTM", "Дата создания", "Дата закрытия",
+    ]
     header_fill = PatternFill("solid", fgColor="1A56DB")
     header_font = Font(bold=True, color="FFFFFF")
 
@@ -206,23 +185,32 @@ async def cab_do_export(callback: CallbackQuery, bot: Bot):
         cell.font = header_font
         cell.alignment = Alignment(horizontal="center")
 
-    status_labels = {"new": "Новая", "in_progress": "В обработке", "closed": "Закрыта", "rejected": "Отклонена"}
+    status_labels = {
+        "new": "Лиды",
+        "in_progress": "В работе",
+        "paid": "Оплачено",
+        "success": "Успех",
+        "rejected": "Отклонено",
+    }
 
     for row, lead in enumerate(leads, 2):
-        ws.cell(row=row, column=1,  value=lead.id)
-        ws.cell(row=row, column=2,  value=lead.name)
-        ws.cell(row=row, column=3,  value=lead.phone)
-        ws.cell(row=row, column=4,  value=lead.source)
-        ws.cell(row=row, column=5,  value=lead.service or "")
-        ws.cell(row=row, column=6,  value=lead.comment or "")
-        ws.cell(row=row, column=7,  value=status_labels.get(lead.status.value, lead.status.value))
-        ws.cell(row=row, column=8,  value=lead.manager.name if lead.manager else "")
-        ws.cell(row=row, column=9,  value=lead.utm_campaign or "")
-        ws.cell(row=row, column=10, value=lead.created_at.strftime("%d.%m.%Y %H:%M") if lead.created_at else "")
+        ws.cell(row=row, column=1, value=lead.id)
+        ws.cell(row=row, column=2, value=lead.name)
+        ws.cell(row=row, column=3, value=lead.phone)
+        ws.cell(row=row, column=4, value=lead.email or "")
+        ws.cell(row=row, column=5, value=lead.source)
+        ws.cell(row=row, column=6, value=lead.service or "")
+        ws.cell(row=row, column=7, value=float(lead.amount) if lead.amount is not None else "")
+        ws.cell(row=row, column=8, value=status_labels.get(lead.status.value, lead.status.value))
+        ws.cell(row=row, column=9, value=lead.manager.name if lead.manager else "")
+        ws.cell(row=row, column=10, value=lead.comment or "")
+        ws.cell(row=row, column=11, value=lead.utm_campaign or "")
+        ws.cell(row=row, column=12, value=lead.created_at.strftime("%d.%m.%Y %H:%M") if lead.created_at else "")
+        ws.cell(row=row, column=13, value=lead.closed_at.strftime("%d.%m.%Y %H:%M") if lead.closed_at else "")
 
         if row % 2 == 0:
             fill = PatternFill("solid", fgColor="F0F7FF")
-            for col in range(1, 11):
+            for col in range(1, len(headers) + 1):
                 ws.cell(row=row, column=col).fill = fill
 
     for col in ws.columns:
@@ -232,93 +220,232 @@ async def cab_do_export(callback: CallbackQuery, bot: Bot):
     wb.save(buffer)
     buffer.seek(0)
 
-    from aiogram.types import BufferedInputFile
     filename = f"leads_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
-    await callback.message.answer_document(
-        BufferedInputFile(buffer.read(), filename=filename),
-        caption=f"📊 Выгрузка: {total} заявок\nФайл: {filename}",
+    await sender.send_document(
+        chat_id=callback.message.chat.id,
+        message_thread_id=callback.message.message_thread_id,
+        document=BufferedInputFile(buffer.read(), filename=filename),
+        caption=f"📤 Экспорт: {total} заявок\nФайл: {filename}",
+    )
     )
 
 
-# ── Email выгрузка ────────────────────────────────────
-
-class EmailState(StatesGroup):
-    waiting_for_email = State()
+# ── Аналитика ────────────────────────────────────────
 
 
-@router.callback_query(F.data == "cab:email_menu")
-async def cab_email_menu(callback: CallbackQuery, state: FSMContext, bot: Bot):
+@router.callback_query(F.data == "cab:analytics")
+async def cab_analytics(callback: CallbackQuery, bot: Bot, sender: TelegramSafeSender):
     if not await _check_admin(bot, callback.from_user.id):
-        await callback.answer("⛔️ Нет доступа", show_alert=True)
+        await sender.answer(callback, "⛔️ Нет доступа", show_alert=True)
         return
-    await callback.answer()
-    await state.set_state(EmailState.waiting_for_email)
-    default = settings.default_export_email
-    hint = f"\n\nТекущий email: <code>{default}</code>" if default else ""
-    await callback.message.edit_text(
-        f"📧 <b>Отправить выгрузку на email</b>{hint}\n\nВведите email адрес:",
+    await sender.answer(callback)
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="📈 Конверсия", callback_data="cab:analytics:conversion"),
+        InlineKeyboardButton(text="👥 Работа с заявками", callback_data="cab:analytics:activity"),
+    )
+    builder.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="cab:back"))
+    await sender.edit_message_text(
+        chat_id=callback.message.chat.id,
+        message_id=callback.message.message_id,
+        "📊 <b>Аналитика</b>\nВыберите режим:",
+        reply_markup=builder.as_markup(),
         parse_mode="HTML",
-        reply_markup=InlineKeyboardBuilder().row(
-            InlineKeyboardButton(text="◀️ Отмена", callback_data="cab:back")
-        ).as_markup(),
+        thread_id=callback.message.message_thread_id,
     )
 
 
-@router.message(EmailState.waiting_for_email)
-async def handle_email_input(message: Message, state: FSMContext):
-    await state.clear()
-    email = message.text.strip()
-    if "@" not in email:
-        await message.answer("⚠️ Некорректный email. Попробуйте снова через /cabinet")
-        return
-    await message.answer(
-        f"✅ Email <code>{email}</code> сохранён.\n"
-        f"Функция отправки на email будет доступна после настройки SMTP в .env\n\n"
-        f"<i>Пока используйте выгрузку прямо в чат — файл будет здесь.</i>",
-        parse_mode="HTML",
-    )
-
-
-# ── Список менеджеров ─────────────────────────────────
-
-@router.callback_query(F.data == "cab:managers")
-async def cab_managers(callback: CallbackQuery, bot: Bot):
+@router.callback_query(F.data.startswith("cab:analytics:conversion"))
+async def cab_analytics_conversion(callback: CallbackQuery, bot: Bot, sender: TelegramSafeSender):
     if not await _check_admin(bot, callback.from_user.id):
-        await callback.answer("⛔️ Нет доступа", show_alert=True)
+        await sender.answer(callback, "⛔️ Нет доступа", show_alert=True)
         return
-    await callback.answer()
+    await sender.answer(callback)
+    await sender.edit_message_text(
+        chat_id=callback.message.chat.id,
+        message_id=callback.message.message_id,
+        "📈 <b>Конверсия</b>\nВыберите период:",
+        reply_markup=_period_keyboard("cab:analytics_conversion").as_markup(),
+        parse_mode="HTML",
+        thread_id=callback.message.message_thread_id,
+    )
 
+
+@router.callback_query(F.data.startswith("cab:analytics_conversion:"))
+async def cab_analytics_conversion_period(callback: CallbackQuery, bot: Bot, sender: TelegramSafeSender):
+    if not await _check_admin(bot, callback.from_user.id):
+        await sender.answer(callback, "⛔️ Нет доступа", show_alert=True)
+        return
+    await sender.answer(callback)
+    period = callback.data.split(":")[2]
+    date_from, date_to = _period_dates(period)
+
+    async with AsyncSessionLocal() as session:
+        repo = LeadRepository(session)
+        stats = await repo.get_conversion_stats(date_from=date_from, date_to=date_to)
+
+    s = stats["by_status"]
+    period_line = f"За период с {date_from:%d.%m.%y} - {date_to:%d.%m.%y}"
+    total = stats["total"]
+
+    lines = [
+        "📈 <b>Конверсия</b>",
+        period_line,
+        f"Всего лидов: {total}",
+        f"Взято в работу: {s.get('in_progress', 0)} ({_pct(s.get('in_progress', 0), total)})",
+        f"Оплачено: {s.get('paid', 0)} ({_pct(s.get('paid', 0), total)})",
+        f"Успех: {s.get('success', 0)} ({_pct(s.get('success', 0), total)})",
+        f"Отклонено: {s.get('rejected', 0)} ({_pct(s.get('rejected', 0), total)})",
+    ]
+
+    await sender.edit_message_text(
+        chat_id=callback.message.chat.id,
+        message_id=callback.message.message_id,
+        text="\n".join(lines),
+        parse_mode="HTML",
+        thread_id=callback.message.message_thread_id,
+    )
+
+
+@router.callback_query(F.data.startswith("cab:analytics:activity"))
+async def cab_analytics_activity(callback: CallbackQuery, bot: Bot, sender: TelegramSafeSender):
+    if not await _check_admin(bot, callback.from_user.id):
+        await sender.answer(callback, "⛔️ Нет доступа", show_alert=True)
+        return
+    await sender.answer(callback)
+    await sender.edit_message_text(
+        chat_id=callback.message.chat.id,
+        message_id=callback.message.message_id,
+        "👥 <b>Работа с заявками</b>\nВыберите период:",
+        reply_markup=_period_keyboard("cab:analytics_activity").as_markup(),
+        parse_mode="HTML",
+        thread_id=callback.message.message_thread_id,
+    )
+
+
+@router.callback_query(F.data.startswith("cab:analytics_activity:"))
+async def cab_analytics_activity_period(callback: CallbackQuery, bot: Bot, sender: TelegramSafeSender):
+    if not await _check_admin(bot, callback.from_user.id):
+        await sender.answer(callback, "⛔️ Нет доступа", show_alert=True)
+        return
+    await sender.answer(callback)
+    period = callback.data.split(":")[2]
     async with AsyncSessionLocal() as session:
         repo = LeadRepository(session)
         managers = await repo.get_all_managers()
 
-    if not managers:
-        text = "👥 Менеджеров пока нет."
-    else:
-        lines = ["<b>👥 Команда:</b>\n"]
-        for m in managers:
-            icon = "👑" if m.is_admin else "👤"
-            role = "Админ" if m.is_admin else "Менеджер"
-            username = f"@{m.tg_username}" if m.tg_username else "—"
-            lines.append(f"{icon} {m.name} ({role})  {username}")
-        text = "\n".join(lines)
-
     builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text="◀️ Назад", callback_data="cab:back"))
-    await callback.message.edit_text(text, reply_markup=builder.as_markup(), parse_mode="HTML")
-
-
-# ── Назад ─────────────────────────────────────────────
-
-@router.callback_query(F.data == "cab:back")
-async def cab_back(callback: CallbackQuery, bot: Bot):
-    if not await _check_admin(bot, callback.from_user.id):
-        await callback.answer()
-        return
-    await callback.answer()
-    builder = _cabinet_keyboard()
-    await callback.message.edit_text(
-        "🗂 <b>Кабинет управления</b>\n\nВыберите действие:",
+    builder.row(InlineKeyboardButton(text="All", callback_data=f"cab:analytics_activity_run:{period}:all"))
+    for m in managers:
+        builder.row(InlineKeyboardButton(text=m.name, callback_data=f"cab:analytics_activity_run:{period}:{m.id}"))
+    builder.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="cab:back"))
+    await sender.edit_message_text(
+        chat_id=callback.message.chat.id,
+        message_id=callback.message.message_id,
+        "Выберите сотрудника:",
         reply_markup=builder.as_markup(),
         parse_mode="HTML",
+        thread_id=callback.message.message_thread_id,
+    )
+
+
+@router.callback_query(F.data.startswith("cab:analytics_activity_run:"))
+async def cab_analytics_activity_run(callback: CallbackQuery, bot: Bot, sender: TelegramSafeSender):
+    if not await _check_admin(bot, callback.from_user.id):
+        await sender.answer(callback, "⛔️ Нет доступа", show_alert=True)
+        return
+    await sender.answer(callback)
+    _, _, period, manager_raw = callback.data.split(":")
+    date_from, date_to = _period_dates(period)
+    manager_id = None if manager_raw == "all" else int(manager_raw)
+
+    async with AsyncSessionLocal() as session:
+        repo = LeadRepository(session)
+        stats = await repo.get_activity_stats(date_from=date_from, date_to=date_to, manager_id=manager_id)
+
+    total = stats["total"]
+    s = stats["by_status"]
+    period_line = f"За период с {date_from:%d.%m.%y} - {date_to:%d.%m.%y}"
+    lines = [
+        "👥 <b>Работа с заявками</b>",
+        period_line,
+        f"Всего лидов: {total}",
+        f"Взято в работу: {s.get('in_progress', 0)} ({_pct(s.get('in_progress', 0), total)})",
+        f"Оплачено: {s.get('paid', 0)} ({_pct(s.get('paid', 0), total)})",
+        f"Успех: {s.get('success', 0)} ({_pct(s.get('success', 0), total)})",
+        f"Отклонено: {s.get('rejected', 0)} ({_pct(s.get('rejected', 0), total)})",
+    ]
+
+    await sender.edit_message_text(
+        chat_id=callback.message.chat.id,
+        message_id=callback.message.message_id,
+        text="\n".join(lines),
+        parse_mode="HTML",
+        thread_id=callback.message.message_thread_id,
+    )
+
+
+def _pct(part: int, total: int) -> str:
+    if not total:
+        return "0%"
+    return f"{round(part / total * 100)}%"
+
+
+# ── Интеграции ───────────────────────────────────────
+
+
+@router.callback_query(F.data == "cab:integrations")
+async def cab_integrations(callback: CallbackQuery, bot: Bot, sender: TelegramSafeSender):
+    if not await _check_admin(bot, callback.from_user.id):
+        await sender.answer(callback, "⛔️ Нет доступа", show_alert=True)
+        return
+    await sender.answer(callback)
+    url = "https://<domain>/api/v1/leads/tilda"
+    text = (
+        "🔗 <b>Webhook для Tilda</b>\n"
+        f"POST {url}\n"
+        f"X-API-Key: {settings.api_secret_key}\n"
+        "📋 JS-сниппет: /integrations/tilda_snippet.js"
+    )
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="📋 Скопировать URL", callback_data="cab:copy_webhook"))
+    builder.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="cab:back"))
+    await sender.edit_message_text(
+        chat_id=callback.message.chat.id,
+        message_id=callback.message.message_id,
+        text=text,
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML",
+        thread_id=callback.message.message_thread_id,
+    )
+
+
+@router.callback_query(F.data == "cab:copy_webhook")
+async def cab_copy_webhook(callback: CallbackQuery, bot: Bot, sender: TelegramSafeSender):
+    if not await _check_admin(bot, callback.from_user.id):
+        await sender.answer(callback)
+        return
+    await sender.answer(callback)
+    await sender.answer(callback.message, "https://<domain>/api/v1/leads/tilda")
+
+
+# ── Тариф ────────────────────────────────────────────
+
+
+@router.callback_query(F.data == "cab:tariff")
+async def cab_tariff(callback: CallbackQuery, bot: Bot, sender: TelegramSafeSender):
+    if not await _check_admin(bot, callback.from_user.id):
+        await sender.answer(callback, "⛔️ Нет доступа", show_alert=True)
+        return
+    await sender.answer(callback)
+    await sender.edit_message_text(
+        chat_id=callback.message.chat.id,
+        message_id=callback.message.message_id,
+        "💳 Текущий тариф: Базовый\n"
+        "Заявок в месяц: без ограничений\n"
+        "Поддержка: @support_username",
+        reply_markup=InlineKeyboardBuilder().row(
+            InlineKeyboardButton(text="⬅️ Назад", callback_data="cab:back")
+        ).as_markup(),
+        thread_id=callback.message.message_thread_id,
     )

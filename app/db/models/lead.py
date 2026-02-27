@@ -8,8 +8,10 @@ from sqlalchemy import (
     ForeignKey,
     Integer,
     JSON,
+    Numeric,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -25,7 +27,8 @@ class Base(DeclarativeBase):
 class LeadStatus(str, enum.Enum):
     NEW = "new"
     IN_PROGRESS = "in_progress"
-    CLOSED = "closed"
+    PAID = "paid"
+    SUCCESS = "success"
     REJECTED = "rejected"
 
 
@@ -86,9 +89,11 @@ class Lead(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(255))
     phone: Mapped[str] = mapped_column(String(50))
+    email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     source: Mapped[str] = mapped_column(String(100))
     service: Mapped[str | None] = mapped_column(String(255), nullable=True)
     comment: Mapped[str] = mapped_column(Text, default="")
+    amount: Mapped[float | None] = mapped_column(Numeric(10, 2), nullable=True)
     utm_campaign: Mapped[str | None] = mapped_column(String(255), nullable=True)
     utm_source: Mapped[str | None] = mapped_column(String(255), nullable=True)
     extra: Mapped[dict | None] = mapped_column(JSON, nullable=True)
@@ -102,6 +107,7 @@ class Lead(Base):
 
     manager_id: Mapped[int | None] = mapped_column(ForeignKey("managers.id"), nullable=True)
     reject_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     tg_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     tg_topic_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -119,6 +125,46 @@ class Lead(Base):
         "LeadComment",
         back_populates="lead",
         order_by="LeadComment.created_at",
+    )
+    card_messages: Mapped[list["LeadCardMessage"]] = relationship(
+        "LeadCardMessage",
+        back_populates="lead",
+        order_by="LeadCardMessage.created_at",
+    )
+    reminders: Mapped[list["Reminder"]] = relationship(
+        "Reminder",
+        back_populates="lead",
+        order_by="Reminder.created_at",
+    )
+
+
+class LeadCardMessage(Base):
+    __tablename__ = "lead_card_messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    lead_id: Mapped[int] = mapped_column(ForeignKey("leads.id"))
+    chat_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    topic_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    message_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+
+    lead: Mapped["Lead"] = relationship("Lead", back_populates="card_messages")
+
+
+class PanelMessage(Base):
+    __tablename__ = "panel_messages"
+    __table_args__ = (
+        UniqueConstraint("chat_id", "topic_id", name="uq_panel_messages_chat_topic"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    chat_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    topic_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    message_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
     )
 
 
@@ -154,3 +200,17 @@ class LeadComment(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     lead: Mapped["Lead"] = relationship("Lead", back_populates="comments")
+
+
+class Reminder(Base):
+    __tablename__ = "reminders"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    lead_id: Mapped[int] = mapped_column(ForeignKey("leads.id"))
+    manager_tg_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    remind_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_sent: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    lead: Mapped["Lead"] = relationship("Lead", back_populates="reminders")
