@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import html
-
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from app.db.models.lead import Lead, LeadStatus, Manager
 from app.bot.utils.card import format_lead_card
 from app.bot.keyboards.lead_keyboards import make_lead_keyboard
+from app.telegram.html_utils import html_escape
 
 
 def render_panel_home() -> str:
@@ -28,7 +27,7 @@ def render_panel_team(managers: list[Manager]) -> str:
         status_icon = "✅" if manager.is_active else "🚫"
         username = f"@{manager.tg_username}" if manager.tg_username else "—"
         lines.append(
-            f"{role_icon} <b>{html.escape(manager.name)}</b> {status_icon}  {html.escape(username)}"
+            f"{role_icon} <b>{html_escape(manager.name)}</b> {status_icon}  {html_escape(username)}"
         )
     return "\n".join(lines)
 
@@ -49,12 +48,12 @@ def _render_lead_status_line(lead: Lead, manager_name: str | None) -> str:
         return "🔵 Статус: Новый"
     if lead.status == LeadStatus.IN_PROGRESS:
         mgr = manager_name or (lead.manager.name if lead.manager else None) or "—"
-        return f"🟡 В работе: {html.escape(mgr)}"
+        return f"🟡 В работе: {html_escape(mgr)}"
     if lead.status == LeadStatus.SUCCESS:
         return "🟢 Закрыто"
     if lead.status == LeadStatus.REJECTED:
         return "🔴 Отклонено"
-    return f"Статус: {html.escape(str(lead.status))}"
+    return f"Статус: {html_escape(str(lead.status))}"
 
 
 def build_kb_panel_home() -> InlineKeyboardMarkup:

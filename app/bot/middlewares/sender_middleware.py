@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Awaitable, Callable, Dict
 
-from aiogram import BaseMiddleware
+from aiogram import BaseMiddleware, Dispatcher
 from aiogram.types import TelegramObject
 
 from app.telegram.safe_sender import TelegramSafeSender
@@ -16,6 +16,8 @@ class SenderMiddleware(BaseMiddleware):
         data: Dict[str, Any],
     ) -> Any:
         dp = data.get("dispatcher")
-        if dp is not None and "sender" in dp:
-            data["sender"] = dp["sender"]
+        if isinstance(dp, Dispatcher):
+            sender = dp.workflow_data.get("sender")
+            if sender is not None:
+                data["sender"] = sender
         return await handler(event, data)

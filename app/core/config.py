@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     crm_group_id:    int
     database_url:    str
     api_secret_key:  str   # никогда не хардкодить! только через .env
+    public_domain:  str = "YOUR_DOMAIN"  # example.com without scheme
 
     # ── Топики (заполняются после /setup) ─────────────────────
     topic_new:          int = 2
