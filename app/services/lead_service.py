@@ -2,6 +2,8 @@ from loguru import logger
 from aiogram.types import InlineKeyboardMarkup
 
 from app.bot.keyboards.lead_keyboards import make_lead_keyboard
+from app.bot.topic_resolver import resolve_topic_thread_id
+from app.bot.topics import STATUS_TO_TOPIC_KEY, TopicKey
 from app.bot.ui.message_ref import MessageRef
 from app.bot.ui.tg_edit import archive_message, edit_text
 from app.bot.utils.card import format_lead_card, format_archive_card
@@ -19,7 +21,14 @@ class LeadService:
     async def create_lead(self, data: dict) -> Lead:
         lead = await self.repo.create(data)
         logger.info(f"lead_action=create lead_id={lead.id} source={lead.source}")
-        ref = await self._post_card(lead, topic_id=settings.topic_new)
+        topic_id = await resolve_topic_thread_id(
+            settings.crm_group_id,
+            TopicKey.NEW,
+            self.repo.session,
+            sender=self.sender,
+            thread_id=None,
+        )
+        ref = await self._post_card(lead, topic_id=topic_id) if topic_id else None
         if ref:
             await self.repo.set_active_card_message(
                 lead_id=lead.id,
@@ -147,7 +156,14 @@ class LeadService:
         }
         clone = await self.repo.create(data)
         logger.info(f"lead_action=clone source_id={lead_id} clone_id={clone.id}")
-        ref = await self._post_card(clone, topic_id=settings.topic_new)
+        topic_id = await resolve_topic_thread_id(
+            settings.crm_group_id,
+            TopicKey.NEW,
+            self.repo.session,
+            sender=self.sender,
+            thread_id=None,
+        )
+        ref = await self._post_card(clone, topic_id=topic_id) if topic_id else None
         if ref:
             await self.repo.set_active_card_message(
                 lead_id=clone.id,
@@ -235,18 +251,15 @@ class LeadService:
             return None
         return await self.repo.get_manager_by_tg_id(manager_tg_id)
 
-    def _topic_for_status(self, status: LeadStatus) -> int:
-        if status == LeadStatus.NEW:
-            return settings.topic_new
-        if status == LeadStatus.IN_PROGRESS:
-            return settings.topic_in_progress
-        if status == LeadStatus.PAID:
-            return settings.topic_paid
-        if status == LeadStatus.SUCCESS:
-            return settings.topic_success
-        if status == LeadStatus.REJECTED:
-            return settings.topic_rejected
-        return settings.topic_new
+    async def _topic_for_status(self, status: LeadStatus) -> int | None:
+        key = STATUS_TO_TOPIC_KEY.get(status, TopicKey.NEW)
+        return await resolve_topic_thread_id(
+            settings.crm_group_id,
+            key,
+            self.repo.session,
+            sender=self.sender,
+            thread_id=None,
+        )
 
     def _build_card_payload(self, lead: Lead) -> tuple[str, InlineKeyboardMarkup]:
         text = format_lead_card(lead)
@@ -311,7 +324,12 @@ class LeadService:
         if not lead_full:
             return
 
-        target_topic = self._topic_for_status(lead_full.status)
+        target_topic = await self._topic_for_status(lead_full.status)
+        if not target_topic:
+            logger.warning(
+                f"lead_move skipped lead_id={lead_full.id} action={action} reason=topic_missing"
+            )
+            return
         archive_text = format_archive_card(lead_full)
 
         if source_ref is None:

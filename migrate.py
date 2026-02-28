@@ -47,7 +47,7 @@ def main():
         print(f"⚙️  Генерирую миграцию: {name}")
         code = run(f'alembic revision --autogenerate -m "{name}"')
         if code == 0:
-            print(f"✅ Миграция создана в alembic/versions/")
+            print("✅ Миграция создана в alembic/versions/")
             print("   Проверьте файл перед применением!")
         else:
             print("❌ Ошибка при генерации.")

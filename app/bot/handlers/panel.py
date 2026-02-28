@@ -6,6 +6,8 @@ from aiogram.types import CallbackQuery, Message
 from loguru import logger
 
 from app.bot.constants.ttl import TTL_MENU_SEC
+from app.bot.topic_resolver import resolve_topic_thread_id
+from app.bot.topics import TopicKey
 from app.bot.ui.panel import (
     render_panel_home,
     render_panel_team,
@@ -36,26 +38,11 @@ async def _check_admin(sender: TelegramSafeSender, user_id: int) -> bool:
 
 async def _pin_panel_message(sender: TelegramSafeSender, chat_id: int, topic_id: int, message_id: int):
     try:
-        await sender._call_chat(
-            "unpin_all_forum_topic_messages",
-            chat_id,
-            topic_id,
-            sender.bot.unpin_all_forum_topic_messages,
-            chat_id=chat_id,
-            message_thread_id=topic_id,
-        )
+        await sender.unpin_all_forum_topic_messages(chat_id, topic_id)
     except Exception as e:
         logger.warning(f"Could not unpin old panel messages: {e}")
     try:
-        await sender._call_chat(
-            "pin_chat_message",
-            chat_id,
-            topic_id,
-            sender.bot.pin_chat_message,
-            chat_id=chat_id,
-            message_id=message_id,
-            disable_notification=True,
-        )
+        await sender.pin_chat_message(chat_id, message_id, disable_notification=True)
     except Exception as e:
         logger.warning(f"Could not pin panel message: {e}")
 
@@ -181,11 +168,21 @@ async def handle_panel_actions(callback: CallbackQuery, state: FSMContext, sende
     await sender.answer(callback)
 
     chat_id = callback.message.chat.id
-    topic_id = callback.message.message_thread_id or settings.topic_managers
     message_id = callback.message.message_id
 
     async with AsyncSessionLocal() as session:
         repo = LeadRepository(session)
+        topic_id = callback.message.message_thread_id
+        if not topic_id:
+            topic_id = await resolve_topic_thread_id(
+                chat_id,
+                TopicKey.MANAGERS,
+                session,
+                sender=sender,
+                thread_id=None,
+            )
+            if not topic_id:
+                return
 
         if action in {"panel_home", "panel_team", "team_cancel"}:
             await state.clear()
@@ -237,11 +234,21 @@ async def handle_manager_contact(message: Message, state: FSMContext, sender: Te
 
     data = await state.get_data()
     panel_chat_id = data.get("panel_chat_id", settings.crm_group_id)
-    panel_topic_id = data.get("panel_topic_id", settings.topic_managers)
+    panel_topic_id = data.get("panel_topic_id")
     panel_message_id = data.get("panel_message_id")
 
     async with AsyncSessionLocal() as session:
         repo = LeadRepository(session)
+        if not panel_topic_id:
+            panel_topic_id = await resolve_topic_thread_id(
+                panel_chat_id,
+                TopicKey.MANAGERS,
+                session,
+                sender=sender,
+                thread_id=None,
+            )
+            if not panel_topic_id:
+                return
 
         if not message.contact or not message.contact.user_id:
             text = (
@@ -274,13 +281,7 @@ async def handle_manager_contact(message: Message, state: FSMContext, sender: Te
         name = " ".join(filter(None, [contact.first_name, contact.last_name])) or "—"
         username = None
         try:
-            chat = await sender._call_chat(
-                "get_chat",
-                contact.user_id,
-                None,
-                sender.bot.get_chat,
-                chat_id=contact.user_id,
-            )
+            chat = await sender.get_chat(contact.user_id)
             if chat.full_name:
                 name = chat.full_name
             username = chat.username

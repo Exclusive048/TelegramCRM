@@ -168,6 +168,23 @@ class PanelMessage(Base):
     )
 
 
+class TenantTopic(Base):
+    __tablename__ = "tenant_topics"
+    __table_args__ = (
+        UniqueConstraint("chat_id", "key", name="uq_tenant_topics_chat_key"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    chat_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    key: Mapped[str] = mapped_column(String(64), nullable=False)
+    thread_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    title: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
 class LeadHistory(Base):
     __tablename__ = "lead_history"
 

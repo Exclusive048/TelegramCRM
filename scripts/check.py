@@ -6,7 +6,7 @@ import sys
 
 COMMANDS: list[tuple[str, list[str]]] = [
     ("lint", [sys.executable, "-m", "ruff", "check", "."]),
-    ("typecheck", [sys.executable, "-m", "mypy", "app", "main.py"]),
+    ("typecheck", [sys.executable, "-X", "utf8", "-m", "mypy", "app", "main.py"]),
     ("encoding", [sys.executable, "-m", "scripts.check_encoding"]),
     ("migrations", [sys.executable, "-m", "scripts.migrations_check"]),
     ("smoke", [sys.executable, "-m", "scripts.smoke"]),
