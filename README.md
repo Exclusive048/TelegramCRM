@@ -5,6 +5,31 @@
 ## Структура проекта
 
 ```
+
+## Quality Checks (Windows PowerShell)
+
+```powershell
+# install dev tools
+pip install -r requirements-dev.txt
+
+# lint
+python -m ruff check .
+
+# typecheck
+python -m mypy app main.py
+
+# encoding (UTF-8 without BOM)
+python -m scripts.check_encoding
+
+# migrations (offline SQL render)
+python -m scripts.migrations_check
+
+# smoke
+python -m scripts.smoke
+
+# all checks
+python -m scripts.check
+```
 crm_bot/
 ├── main.py                         # Точка входа — запускает бота и API
 ├── .env.example                    # Шаблон переменных окружения

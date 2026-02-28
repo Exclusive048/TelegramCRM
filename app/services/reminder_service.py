@@ -6,6 +6,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.date import DateTrigger
 from loguru import logger
 
+from app.bot.constants.ttl import TTL_MENU_SEC
 from app.core.config import settings
 from app.db.database import AsyncSessionLocal
 from app.db.repositories.lead_repository import LeadRepository
@@ -63,10 +64,11 @@ async def _send_reminder_job(reminder_id: int, sender: TelegramSafeSender):
         if link:
             lines.append(f"Ссылка: {link}")
 
-        await sender.send_text(
+        await sender.send_ephemeral_text(
             chat_id=settings.crm_group_id,
             message_thread_id=settings.topic_reminders,
             text="\n".join(lines),
+            ttl_sec=TTL_MENU_SEC,
         )
         await repo.mark_reminder_sent(reminder_id)
         await session.commit()

@@ -3,6 +3,7 @@ from __future__ import annotations
 from aiogram.types import CallbackQuery
 from loguru import logger
 
+from app.bot.constants.ttl import TTL_MENU_SEC
 from app.telegram.safe_sender import TelegramSafeSender
 
 
@@ -51,7 +52,7 @@ async def _cleanup_message(
         )
 
     try:
-        await sender.edit_message_text(
+        await sender.edit_text(
             chat_id=chat_id,
             message_id=message_id,
             text=done_text,
@@ -68,6 +69,21 @@ async def _cleanup_message(
             chat_id,
             message_id,
             text_err,
+        )
+
+    try:
+        await sender.schedule_delete(
+            chat_id=chat_id,
+            message_id=message_id,
+            thread_id=thread_id,
+            ttl_sec=TTL_MENU_SEC,
+        )
+    except Exception as schedule_err:
+        logger.debug(
+            "menu_cleanup schedule delete failed chat_id={} message_id={} err={}",
+            chat_id,
+            message_id,
+            schedule_err,
         )
 
 
