@@ -4,7 +4,7 @@ lint:
 	python -m ruff check .
 
 typecheck:
-	python -m mypy app main.py
+	python -X utf8 -m mypy app main.py
 
 encoding:
 	python -m scripts.check_encoding

@@ -301,6 +301,62 @@ class TelegramSafeSender:
             **kwargs,
         )
 
+    async def get_chat(self, chat_id: int):
+        key = self._rate_key(chat_id, None)
+        return await self._call(
+            "get_chat",
+            key,
+            self.bot.get_chat,
+            chat_id=chat_id,
+        )
+
+    async def get_chat_member(self, chat_id: int, user_id: int):
+        key = self._rate_key(chat_id, None)
+        return await self._call(
+            "get_chat_member",
+            key,
+            self.bot.get_chat_member,
+            chat_id=chat_id,
+            user_id=user_id,
+        )
+
+    async def create_forum_topic(self, chat_id: int, name: str):
+        key = self._rate_key(chat_id, None)
+        return await self._call(
+            "create_forum_topic",
+            key,
+            self.bot.create_forum_topic,
+            chat_id=chat_id,
+            name=name,
+        )
+
+    async def unpin_all_forum_topic_messages(self, chat_id: int, message_thread_id: int):
+        key = self._rate_key(chat_id, message_thread_id)
+        return await self._call(
+            "unpin_all_forum_topic_messages",
+            key,
+            self.bot.unpin_all_forum_topic_messages,
+            chat_id=chat_id,
+            message_thread_id=message_thread_id,
+        )
+
+    async def pin_chat_message(
+        self,
+        chat_id: int,
+        message_id: int,
+        *,
+        disable_notification: bool = True,
+    ):
+        key = self._rate_key(chat_id, None)
+        return await self._call(
+            "pin_chat_message",
+            key,
+            self.bot.pin_chat_message,
+            chat_id=chat_id,
+            message_id=message_id,
+            disable_notification=disable_notification,
+        )
+
     async def schedule_delete(
         self,
         *,

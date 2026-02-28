@@ -15,18 +15,6 @@ class Settings(BaseSettings):
     api_secret_key:  str   # никогда не хардкодить! только через .env
     public_domain:  str = "YOUR_DOMAIN"  # example.com without scheme
 
-    # ── Топики (заполняются после /setup) ─────────────────────
-    topic_new:          int = 2
-    topic_in_progress:  int = 4
-    topic_paid:         int = 6
-    topic_success:      int = 8
-    topic_rejected:     int = 10
-    topic_general:      int = 12
-    topic_reminders:    int = 14
-    topic_cabinet:      int = 16
-    topic_managers:     int = 18
-    topic_knowledge:    int = 20
-
     # ── Redis ──────────────────────────────────────────────────
     use_redis:  bool = False          # false = MemoryStorage (для dev)
     redis_url:  str  = "redis://localhost:6379/3"

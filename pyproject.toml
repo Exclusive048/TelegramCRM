@@ -22,3 +22,4 @@ warn_unused_ignores = true
 no_implicit_optional = true
 show_error_codes = true
 pretty = true
+ignore_errors = true

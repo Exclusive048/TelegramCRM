@@ -16,7 +16,7 @@ pip install -r requirements-dev.txt
 python -m ruff check .
 
 # typecheck
-python -m mypy app main.py
+python -X utf8 -m mypy app main.py
 
 # encoding (UTF-8 without BOM)
 python -m scripts.check_encoding

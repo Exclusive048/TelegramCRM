@@ -9,34 +9,49 @@
 Важно: TG-статус (владелец/админ группы) проверяем через get_chat_member.
 Запись в БД нужна чтобы бот знал кто из TG-админов явно назначен в CRM.
 """
-from aiogram.types import ChatMemberOwner, ChatMemberAdministrator
+from aiogram.enums import ChatMemberStatus
+from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 from app.db.repositories.lead_repository import LeadRepository
 from app.db.models.lead import Manager, ManagerRole
 from app.telegram.safe_sender import TelegramSafeSender
+import logging
 
+log = logging.getLogger(__name__)
 
-async def get_tg_role(sender: TelegramSafeSender, chat_id: int, user_id: int) -> str | None:
+async def get_tg_role(sender: TelegramSafeSender, chat_id: int, user_id: int) -> ChatMemberStatus | None:
     """
-    Возвращает: 'owner' | 'administrator' | 'member' | None
+    Возвращает: 'creator' | 'administrator' | 'member' | None
     """
     try:
-        member = await sender._call_chat(
-            "get_chat_member",
-            chat_id,
-            None,
-            sender.bot.get_chat_member,
-            chat_id=chat_id,
-            user_id=user_id,
-        )
+        member = await sender.get_chat_member(chat_id=chat_id, user_id=user_id)
         return member.status
+
+    except TelegramBadRequest as e:
+        # пользователь не участник / неправильный chat_id
+        log.debug(
+            "getChatMember bad request",
+            extra={"chat_id": chat_id, "user_id": user_id, "error": str(e)},
+        )
+        return None
+
+    except TelegramRetryAfter:
+        # инфраструктура, можно пробросить выше
+        raise
+
     except Exception:
+        # неожиданный баг — логируем ОБЯЗАТЕЛЬНО
+        log.exception(
+            "Unexpected error in get_tg_role",
+            extra={"chat_id": chat_id, "user_id": user_id},
+        )
         return None
 
 
 async def is_tg_admin(sender: TelegramSafeSender, chat_id: int, user_id: int) -> bool:
-    """Является ли пользователь владельцем или администратором TG-группы"""
     status = await get_tg_role(sender, chat_id, user_id)
-    return status in ("creator", "administrator")
+    if status is None:
+        return False
+    return status in (ChatMemberStatus.CREATOR, ChatMemberStatus.ADMINISTRATOR)
 
 
 async def get_manager(repo: LeadRepository, tg_id: int) -> Manager | None:

@@ -1,32 +1,23 @@
 from aiogram import Router
 from aiogram.filters import Command
-from aiogram.types import BufferedInputFile, ChatMemberOwner, InlineKeyboardButton, Message
+from aiogram.types import ChatMemberOwner, InlineKeyboardButton, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from loguru import logger
 
 from app.bot.constants.ttl import TTL_ERROR_SEC, TTL_MENU_SEC
 from app.bot.handlers.panel import ensure_panel_message
+from app.bot.topic_cache import invalidate as invalidate_topic_cache
+from app.bot.topic_resolver import resolve_topic_thread_id
+from app.bot.topics import STATUS_TO_TOPIC_KEY, TOPIC_SPECS, TopicKey
 from app.core.config import settings
 from app.core.permissions import is_tg_admin
 from app.db.database import AsyncSessionLocal
 from app.db.models.lead import LeadStatus, ManagerRole
 from app.db.repositories.lead_repository import LeadRepository
+from app.db.repositories.tenant_topics import TenantTopicRepository
 from app.telegram.safe_sender import TelegramSafeSender
 
 router = Router()
-
-TOPICS_TO_CREATE = [
-    ("📥 Лиды", "TOPIC_NEW"),
-    ("🛠 В работе", "TOPIC_IN_PROGRESS"),
-    ("💳 Оплачено", "TOPIC_PAID"),
-    ("🏆 Успех", "TOPIC_SUCCESS"),
-    ("❌ Отклонено", "TOPIC_REJECTED"),
-    ("💬 Общий чат", "TOPIC_GENERAL"),
-    ("🔔 Напоминания", "TOPIC_REMINDERS"),
-    ("🗂 Кабинет", "TOPIC_CABINET"),
-    ("👥 Чат менеджеров", "TOPIC_MANAGERS"),
-    ("📚 База знаний", "TOPIC_KNOWLEDGE"),
-]
 
 
 async def _ensure_owner_registered(user_id: int, full_name: str, username: str | None):
@@ -54,7 +45,6 @@ async def cmd_setup(message: Message, sender: TelegramSafeSender):
             ttl_sec=TTL_ERROR_SEC,
         )
         return
-
     if not await is_tg_admin(sender, settings.crm_group_id, message.from_user.id):
         await sender.send_ephemeral_text(
             chat_id=message.chat.id,
@@ -64,14 +54,17 @@ async def cmd_setup(message: Message, sender: TelegramSafeSender):
         )
         return
 
-    member = await sender._call_chat(
-        "get_chat_member",
-        settings.crm_group_id,
-        None,
-        sender.bot.get_chat_member,
-        chat_id=settings.crm_group_id,
-        user_id=message.from_user.id,
-    )
+    chat = await sender.get_chat(settings.crm_group_id)
+    if not getattr(chat, "is_forum", False):
+        await sender.send_ephemeral_text(
+            chat_id=message.chat.id,
+            message_thread_id=message.message_thread_id,
+            text="⚠️ В этой группе не включены темы (Forum).",
+            ttl_sec=TTL_ERROR_SEC,
+        )
+        return
+
+    member = await sender.get_chat_member(settings.crm_group_id, message.from_user.id)
     if isinstance(member, ChatMemberOwner):
         await _ensure_owner_registered(
             message.from_user.id,
@@ -87,54 +80,58 @@ async def cmd_setup(message: Message, sender: TelegramSafeSender):
     )
     created: list[tuple[str, str, int]] = []
     errors: list[tuple[str, str]] = []
+    chat_id = message.chat.id
 
-    for name, env_key in TOPICS_TO_CREATE:
+    async with AsyncSessionLocal() as session:
+        repo = TenantTopicRepository(session)
+        existing_map = await repo.get_topic_map(chat_id)
+
+        for spec in TOPIC_SPECS:
+            existing_thread = existing_map.get(spec.key.value)
+            if existing_thread:
+                await repo.upsert_topic(
+                    chat_id=chat_id,
+                    key=spec.key.value,
+                    thread_id=existing_thread,
+                    title=spec.title,
+                )
+                continue
+            try:
+                topic = await sender.create_forum_topic(chat_id, spec.title)
+                await repo.upsert_topic(
+                    chat_id=chat_id,
+                    key=spec.key.value,
+                    thread_id=topic.message_thread_id,
+                    title=spec.title,
+                )
+                created.append((spec.title, spec.key.value, topic.message_thread_id))
+                existing_map[spec.key.value] = topic.message_thread_id
+                logger.info(f"Topic created: {spec.title} -> id={topic.message_thread_id}")
+            except Exception as exc:
+                errors.append((spec.title, str(exc)))
+                logger.error(f"Failed to create topic '{spec.title}': {exc}")
+
+        await session.commit()
+
+    invalidate_topic_cache(chat_id)
+
+    topic_managers_id = existing_map.get(TopicKey.MANAGERS.value)
+    if topic_managers_id:
         try:
-            topic = await sender._call_chat(
-                "create_forum_topic",
-                settings.crm_group_id,
-                None,
-                sender.bot.create_forum_topic,
-                chat_id=settings.crm_group_id,
-                name=name,
-            )
-            created.append((name, env_key, topic.message_thread_id))
-            logger.info(f"Topic created: {name} -> id={topic.message_thread_id}")
+            await ensure_panel_message(sender, chat_id, topic_managers_id)
+            logger.info(f"Panel message ensured in topic {topic_managers_id}")
         except Exception as exc:
-            errors.append((name, str(exc)))
-            logger.error(f"Failed to create topic '{name}': {exc}")
-
-    topic_managers_id = next(
-        (tid for _, env_key, tid in created if env_key == "TOPIC_MANAGERS"),
-        settings.topic_managers,
-    )
-    try:
-        await ensure_panel_message(sender, settings.crm_group_id, topic_managers_id)
-        logger.info(f"Panel message ensured in topic {topic_managers_id}")
-    except Exception as exc:
-        errors.append(("Пульт управления", str(exc)))
-        logger.error(f"Failed to ensure panel message: {exc}")
-
-    env_lines = [f"{env_key}={tid}" for _, env_key, tid in created]
-    if env_lines:
-        env_content = "\n".join(env_lines) + "\n"
-        await sender.send_document(
-            chat_id=message.chat.id,
-            message_thread_id=message.message_thread_id,
-            document=BufferedInputFile(env_content.encode("utf-8"), filename="topics.env"),
-            caption="topics.env",
-            parse_mode=None,
-            ttl_sec=TTL_MENU_SEC,
-        )
+            errors.append(("Пульт управления", str(exc)))
+            logger.error(f"Failed to ensure panel message: {exc}")
 
     summary_lines = ["✅ Топики созданы."]
-    if env_lines:
-        summary_lines.append("Файл topics.env отправлен.")
+    if created:
+        summary_lines.append(f"Создано новых: {len(created)}.")
     if errors:
         summary_lines.append("Ошибки:")
         for name, err in errors:
             summary_lines.append(f"- {name}: {err}")
-    summary_lines.append("После обновления .env перезапусти: python main.py")
+    summary_lines.append("Готово.")
 
     await sender.edit_text(
         chat_id=progress.chat.id,
@@ -158,7 +155,7 @@ async def cmd_setup(message: Message, sender: TelegramSafeSender):
         pass
 
     try:
-        await _ensure_topic_menus(sender, created)
+        await _ensure_topic_menus(sender, chat_id)
         logger.info("Topic menus ensured")
     except Exception as exc:
         logger.error(f"Failed to ensure topic menus: {exc}")
@@ -246,14 +243,7 @@ async def cmd_make_admin(message: Message, sender: TelegramSafeSender):
     if message.chat.id != settings.crm_group_id:
         return
 
-    member = await sender._call_chat(
-        "get_chat_member",
-        settings.crm_group_id,
-        None,
-        sender.bot.get_chat_member,
-        chat_id=settings.crm_group_id,
-        user_id=message.from_user.id,
-    )
+    member = await sender.get_chat_member(settings.crm_group_id, message.from_user.id)
     if not isinstance(member, ChatMemberOwner):
         await sender.send_ephemeral_text(
             chat_id=message.chat.id,
@@ -414,20 +404,18 @@ async def cmd_managers(message: Message, sender: TelegramSafeSender):
         pass
 
 
-async def _ensure_topic_menus(sender: TelegramSafeSender, created: list[tuple[str, str, int]]):
-    topic_map = {env_key: tid for _, env_key, tid in created}
-
-    topic_new = topic_map.get("TOPIC_NEW", settings.topic_new)
-    topic_in_progress = topic_map.get("TOPIC_IN_PROGRESS", settings.topic_in_progress)
-    topic_paid = topic_map.get("TOPIC_PAID", settings.topic_paid)
-    topic_success = topic_map.get("TOPIC_SUCCESS", settings.topic_success)
-    topic_rejected = topic_map.get("TOPIC_REJECTED", settings.topic_rejected)
-
-    await _post_topic_menu(sender, topic_new, LeadStatus.NEW)
-    await _post_topic_menu(sender, topic_in_progress, LeadStatus.IN_PROGRESS)
-    await _post_topic_menu(sender, topic_paid, LeadStatus.PAID)
-    await _post_topic_menu(sender, topic_success, LeadStatus.SUCCESS)
-    await _post_topic_menu(sender, topic_rejected, LeadStatus.REJECTED)
+async def _ensure_topic_menus(sender: TelegramSafeSender, chat_id: int):
+    async with AsyncSessionLocal() as session:
+        for status, key in STATUS_TO_TOPIC_KEY.items():
+            topic_id = await resolve_topic_thread_id(
+                chat_id,
+                key,
+                session,
+                sender=sender,
+                thread_id=None,
+            )
+            if topic_id:
+                await _post_topic_menu(sender, chat_id, topic_id, status)
 
 
 def _build_topic_menu(status: LeadStatus) -> InlineKeyboardBuilder:
@@ -453,11 +441,16 @@ def _build_topic_menu(status: LeadStatus) -> InlineKeyboardBuilder:
     return builder
 
 
-async def _post_topic_menu(sender: TelegramSafeSender, topic_id: int, status: LeadStatus):
+async def _post_topic_menu(
+    sender: TelegramSafeSender,
+    chat_id: int,
+    topic_id: int,
+    status: LeadStatus,
+):
     text = "Меню действий"
     builder = _build_topic_menu(status)
     await sender.send_ephemeral_text(
-        chat_id=settings.crm_group_id,
+        chat_id=chat_id,
         message_thread_id=topic_id,
         text=text,
         reply_markup=builder.as_markup(),
