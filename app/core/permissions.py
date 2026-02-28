@@ -9,26 +9,33 @@
 Важно: TG-статус (владелец/админ группы) проверяем через get_chat_member.
 Запись в БД нужна чтобы бот знал кто из TG-админов явно назначен в CRM.
 """
-from aiogram import Bot
 from aiogram.types import ChatMemberOwner, ChatMemberAdministrator
 from app.db.repositories.lead_repository import LeadRepository
 from app.db.models.lead import Manager, ManagerRole
+from app.telegram.safe_sender import TelegramSafeSender
 
 
-async def get_tg_role(bot: Bot, chat_id: int, user_id: int) -> str | None:
+async def get_tg_role(sender: TelegramSafeSender, chat_id: int, user_id: int) -> str | None:
     """
     Возвращает: 'owner' | 'administrator' | 'member' | None
     """
     try:
-        member = await bot.get_chat_member(chat_id, user_id)
+        member = await sender._call_chat(
+            "get_chat_member",
+            chat_id,
+            None,
+            sender.bot.get_chat_member,
+            chat_id=chat_id,
+            user_id=user_id,
+        )
         return member.status
     except Exception:
         return None
 
 
-async def is_tg_admin(bot: Bot, chat_id: int, user_id: int) -> bool:
+async def is_tg_admin(sender: TelegramSafeSender, chat_id: int, user_id: int) -> bool:
     """Является ли пользователь владельцем или администратором TG-группы"""
-    status = await get_tg_role(bot, chat_id, user_id)
+    status = await get_tg_role(sender, chat_id, user_id)
     return status in ("creator", "administrator")
 
 
@@ -43,12 +50,12 @@ async def is_any_manager(repo: LeadRepository, tg_id: int) -> bool:
     return m is not None and m.is_active
 
 
-async def is_crm_admin(bot: Bot, repo: LeadRepository, chat_id: int, tg_id: int) -> bool:
+async def is_crm_admin(sender: TelegramSafeSender, repo: LeadRepository, chat_id: int, tg_id: int) -> bool:
     """
     CRM-админ = TG-админ группы И запись в managers с role=admin.
     Владелец группы всегда считается CRM-админом если он в managers.
     """
-    if not await is_tg_admin(bot, chat_id, tg_id):
+    if not await is_tg_admin(sender, chat_id, tg_id):
         return False
     m = await get_manager(repo, tg_id)
     if m is None or not m.is_active:

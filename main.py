@@ -9,8 +9,9 @@ from loguru import logger
 from app.core.config import settings
 from app.db.database import create_tables
 from app.api.routes import leads as leads_router
-from app.bot.handlers import lead_callbacks, setup, cabinet, panel
+from app.bot.handlers import lead_callbacks, setup, cabinet, panel, input_flow
 from app.bot.middlewares.sender_middleware import SenderMiddleware
+from app.services.message_deletion_service import MessageDeletionService
 from app.services.reminder_service import ReminderService
 from app.telegram.safe_sender import TelegramSafeSender, ChatRateLimiter
 
@@ -40,10 +41,22 @@ async def main():
 
     bot = Bot(token=settings.bot_token, default=DefaultBotProperties(parse_mode="HTML"))
 
+    deletion_service = None
+    if settings.use_redis:
+        from redis.asyncio import Redis
+
+        redis_client = Redis.from_url(settings.redis_url, decode_responses=True)
+        deletion_service = MessageDeletionService(redis_client)
+        logger.info("Message deletion service: Redis")
+    else:
+        deletion_service = MessageDeletionService()
+        logger.warning("Message deletion service: in-memory (not persistent)")
+
     sender = TelegramSafeSender(
         bot,
         limiter=ChatRateLimiter(min_delay_sec=1.1),
         max_attempts=6,
+        deletion_service=deletion_service,
     )
 
     # Storage: Redis если USE_REDIS=true, иначе Memory
@@ -62,7 +75,9 @@ async def main():
     dp.include_router(setup.router)
     dp.include_router(cabinet.router)
     dp.include_router(panel.router)
+    dp.include_router(input_flow.router)
 
+    await deletion_service.start(sender)
     await ReminderService.start_scheduler(sender)
 
     app = create_app(bot, sender)

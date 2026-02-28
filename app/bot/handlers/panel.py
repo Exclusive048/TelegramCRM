@@ -1,10 +1,11 @@
-from aiogram import Router, F, Bot
+from aiogram import Router, F
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 from loguru import logger
 
+from app.bot.constants.ttl import TTL_MENU_SEC
 from app.bot.ui.panel import (
     render_panel_home,
     render_panel_team,
@@ -27,19 +28,34 @@ class PanelAddManagerState(StatesGroup):
     waiting_for_contact = State()
 
 
-async def _check_admin(bot: Bot, user_id: int) -> bool:
+async def _check_admin(sender: TelegramSafeSender, user_id: int) -> bool:
     async with AsyncSessionLocal() as session:
         repo = LeadRepository(session)
-        return await is_crm_admin(bot, repo, settings.crm_group_id, user_id)
+        return await is_crm_admin(sender, repo, settings.crm_group_id, user_id)
 
 
-async def _pin_panel_message(bot: Bot, chat_id: int, topic_id: int, message_id: int):
+async def _pin_panel_message(sender: TelegramSafeSender, chat_id: int, topic_id: int, message_id: int):
     try:
-        await bot.unpin_all_forum_topic_messages(chat_id, message_thread_id=topic_id)
+        await sender._call_chat(
+            "unpin_all_forum_topic_messages",
+            chat_id,
+            topic_id,
+            sender.bot.unpin_all_forum_topic_messages,
+            chat_id=chat_id,
+            message_thread_id=topic_id,
+        )
     except Exception as e:
         logger.warning(f"Could not unpin old panel messages: {e}")
     try:
-        await bot.pin_chat_message(chat_id=chat_id, message_id=message_id, disable_notification=True)
+        await sender._call_chat(
+            "pin_chat_message",
+            chat_id,
+            topic_id,
+            sender.bot.pin_chat_message,
+            chat_id=chat_id,
+            message_id=message_id,
+            disable_notification=True,
+        )
     except Exception as e:
         logger.warning(f"Could not pin panel message: {e}")
 
@@ -62,6 +78,12 @@ async def _safe_edit_panel_message(
             parse_mode="HTML",
             thread_id=topic_id,
         )
+        await sender.schedule_delete(
+            chat_id=chat_id,
+            message_id=message_id,
+            thread_id=topic_id,
+            ttl_sec=TTL_MENU_SEC,
+        )
         return message_id
     except TelegramBadRequest as e:
         msg = str(e).lower()
@@ -75,6 +97,12 @@ async def _safe_edit_panel_message(
                 )
             except TelegramBadRequest as edit_err:
                 logger.warning(f"Panel reply markup edit failed: {edit_err}")
+            await sender.schedule_delete(
+                chat_id=chat_id,
+                message_id=message_id,
+                thread_id=topic_id,
+                ttl_sec=TTL_MENU_SEC,
+            )
             return message_id
         if any(token in msg for token in ("message to edit not found", "message_id_invalid", "message can't be edited")):
             new_msg = await sender.send_message(
@@ -85,7 +113,13 @@ async def _safe_edit_panel_message(
                 parse_mode="HTML",
             )
             await repo.set_panel_message_id(chat_id, topic_id, new_msg.message_id)
-            await _pin_panel_message(sender.bot, chat_id, topic_id, new_msg.message_id)
+            await sender.schedule_delete(
+                chat_id=chat_id,
+                message_id=new_msg.message_id,
+                thread_id=topic_id,
+                ttl_sec=TTL_MENU_SEC,
+            )
+            await _pin_panel_message(sender, chat_id, topic_id, new_msg.message_id)
             logger.warning(f"Panel message restored with new message_id={new_msg.message_id}")
             return new_msg.message_id
         logger.error(f"Failed to edit panel message: {e}")
@@ -111,7 +145,7 @@ async def ensure_panel_message(sender: TelegramSafeSender, chat_id: int, topic_i
             )
             await repo.set_panel_message_id(chat_id, topic_id, message_id)
             await session.commit()
-            await _pin_panel_message(sender.bot, chat_id, topic_id, message_id)
+            await _pin_panel_message(sender, chat_id, topic_id, message_id)
             return message_id
 
         msg = await sender.send_message(
@@ -123,7 +157,13 @@ async def ensure_panel_message(sender: TelegramSafeSender, chat_id: int, topic_i
         )
         await repo.get_or_create_panel_message_id(chat_id, topic_id, msg.message_id)
         await session.commit()
-        await _pin_panel_message(sender.bot, chat_id, topic_id, msg.message_id)
+        await sender.schedule_delete(
+            chat_id=chat_id,
+            message_id=msg.message_id,
+            thread_id=topic_id,
+            ttl_sec=TTL_MENU_SEC,
+        )
+        await _pin_panel_message(sender, chat_id, topic_id, msg.message_id)
         return msg.message_id
 
 
@@ -134,7 +174,7 @@ async def handle_panel_actions(callback: CallbackQuery, state: FSMContext, sende
         await sender.answer(callback)
         return
 
-    if not await _check_admin(callback.bot, callback.from_user.id):
+    if not await _check_admin(sender, callback.from_user.id):
         await sender.answer(callback, "⛔ Нет доступа.", show_alert=True)
         return
 
@@ -192,7 +232,7 @@ async def handle_panel_actions(callback: CallbackQuery, state: FSMContext, sende
 
 @router.message(PanelAddManagerState.waiting_for_contact)
 async def handle_manager_contact(message: Message, state: FSMContext, sender: TelegramSafeSender):
-    if not await _check_admin(message.bot, message.from_user.id):
+    if not await _check_admin(sender, message.from_user.id):
         return
 
     data = await state.get_data()
@@ -220,13 +260,27 @@ async def handle_manager_contact(message: Message, state: FSMContext, sender: Te
                     keyboard,
                 )
                 await session.commit()
+            try:
+                await sender.delete_message(
+                    chat_id=message.chat.id,
+                    message_id=message.message_id,
+                    thread_id=message.message_thread_id,
+                )
+            except Exception:
+                pass
             return
 
         contact = message.contact
         name = " ".join(filter(None, [contact.first_name, contact.last_name])) or "—"
         username = None
         try:
-            chat = await sender.bot.get_chat(contact.user_id)
+            chat = await sender._call_chat(
+                "get_chat",
+                contact.user_id,
+                None,
+                sender.bot.get_chat,
+                chat_id=contact.user_id,
+            )
             if chat.full_name:
                 name = chat.full_name
             username = chat.username
@@ -268,3 +322,11 @@ async def handle_manager_contact(message: Message, state: FSMContext, sender: Te
             await session.commit()
 
     await state.clear()
+    try:
+        await sender.delete_message(
+            chat_id=message.chat.id,
+            message_id=message.message_id,
+            thread_id=message.message_thread_id,
+        )
+    except Exception:
+        pass

@@ -4,12 +4,13 @@
 """
 from datetime import datetime, timedelta
 
-from aiogram import Router, F, Bot
+from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, BufferedInputFile, FSInputFile
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from app.core.config import settings
+from app.bot.constants.ttl import TTL_MENU_SEC, TTL_ERROR_SEC
 from app.core.permissions import is_crm_admin
 from app.db.database import AsyncSessionLocal
 from app.db.repositories.lead_repository import LeadRepository
@@ -20,10 +21,10 @@ from app.telegram.safe_sender import TelegramSafeSender
 router = Router()
 
 
-async def _check_admin(bot: Bot, user_id: int) -> bool:
+async def _check_admin(sender: TelegramSafeSender, user_id: int) -> bool:
     async with AsyncSessionLocal() as session:
         repo = LeadRepository(session)
-        return await is_crm_admin(bot, repo, settings.crm_group_id, user_id)
+        return await is_crm_admin(sender, repo, settings.crm_group_id, user_id)
 
 
 def _main_keyboard() -> InlineKeyboardBuilder:
@@ -77,32 +78,51 @@ def _period_dates(period: str) -> tuple[datetime, datetime]:
 
 
 @router.message(Command("cabinet"))
-async def cmd_cabinet(message: Message, bot: Bot, sender: TelegramSafeSender):
-    if not await _check_admin(bot, message.from_user.id):
-        await sender.answer(message, "⛔️ Кабинет доступен только CRM-администраторам.")
+async def cmd_cabinet(message: Message, sender: TelegramSafeSender):
+    if not await _check_admin(sender, message.from_user.id):
+        await sender.send_ephemeral_text(
+            chat_id=message.chat.id,
+            message_thread_id=message.message_thread_id,
+            text="⛔️ Кабинет доступен только CRM-администраторам.",
+            ttl_sec=TTL_ERROR_SEC,
+        )
         return
 
-    await sender.answer(
-        message,
-        "🗂 <b>Кабинет</b>\n\nВыберите раздел:",
+    await sender.send_ephemeral_text(
+        chat_id=message.chat.id,
+        message_thread_id=message.message_thread_id,
+        text="Кабинет\n\nВыберите раздел:",
         reply_markup=_main_keyboard().as_markup(),
-        parse_mode="HTML",
+        ttl_sec=TTL_MENU_SEC,
     )
+    try:
+        await sender.delete_message(
+            chat_id=message.chat.id,
+            message_id=message.message_id,
+            thread_id=message.message_thread_id,
+        )
+    except Exception:
+        pass
 
 
 @router.callback_query(F.data == "cab:back")
-async def cab_back(callback: CallbackQuery, bot: Bot, sender: TelegramSafeSender):
-    if not await _check_admin(bot, callback.from_user.id):
+async def cab_back(callback: CallbackQuery, sender: TelegramSafeSender):
+    if not await _check_admin(sender, callback.from_user.id):
         await sender.answer(callback)
         return
     await sender.answer(callback)
-    await sender.edit_message_text(
+    await sender.edit_text(
         chat_id=callback.message.chat.id,
         message_id=callback.message.message_id,
-        text="🗂 <b>Кабинет</b>\n\nВыберите раздел:",
+        text="Кабинет\n\nВыберите раздел:",
         reply_markup=_main_keyboard().as_markup(),
-        parse_mode="HTML",
         thread_id=callback.message.message_thread_id,
+    )
+    await sender.schedule_delete(
+        chat_id=callback.message.chat.id,
+        message_id=callback.message.message_id,
+        thread_id=callback.message.message_thread_id,
+        ttl_sec=TTL_MENU_SEC,
     )
 
 
@@ -110,29 +130,34 @@ async def cab_back(callback: CallbackQuery, bot: Bot, sender: TelegramSafeSender
 
 
 @router.callback_query(F.data == "cab:export")
-async def cab_export_menu(callback: CallbackQuery, bot: Bot, sender: TelegramSafeSender):
-    if not await _check_admin(bot, callback.from_user.id):
+async def cab_export_menu(callback: CallbackQuery, sender: TelegramSafeSender):
+    if not await _check_admin(sender, callback.from_user.id):
         await sender.answer(callback, "⛔️ Нет доступа", show_alert=True)
         return
     await sender.answer(callback)
-    await sender.edit_message_text(
+    await sender.edit_text(
         chat_id=callback.message.chat.id,
         message_id=callback.message.message_id,
-        text="📤 <b>Экспорт клиентов</b>\nВыберите этап:",
+        text="Экспорт клиентов\nВыберите этап:",
         reply_markup=_stage_keyboard("cab:export_stage").as_markup(),
-        parse_mode="HTML",
         thread_id=callback.message.message_thread_id,
+    )
+    await sender.schedule_delete(
+        chat_id=callback.message.chat.id,
+        message_id=callback.message.message_id,
+        thread_id=callback.message.message_thread_id,
+        ttl_sec=TTL_MENU_SEC,
     )
 
 
 @router.callback_query(F.data.startswith("cab:export_stage:"))
-async def cab_export_period(callback: CallbackQuery, bot: Bot, sender: TelegramSafeSender):
-    if not await _check_admin(bot, callback.from_user.id):
+async def cab_export_period(callback: CallbackQuery, sender: TelegramSafeSender):
+    if not await _check_admin(sender, callback.from_user.id):
         await sender.answer(callback, "⛔️ Нет доступа", show_alert=True)
         return
     await sender.answer(callback)
     stage = callback.data.split(":")[2]
-    await sender.edit_message_text(
+    await sender.edit_text(
         chat_id=callback.message.chat.id,
         message_id=callback.message.message_id,
         text="📅 <b>Выберите период</b>:",
@@ -140,11 +165,17 @@ async def cab_export_period(callback: CallbackQuery, bot: Bot, sender: TelegramS
         parse_mode="HTML",
         thread_id=callback.message.message_thread_id,
     )
+    await sender.schedule_delete(
+        chat_id=callback.message.chat.id,
+        message_id=callback.message.message_id,
+        thread_id=callback.message.message_thread_id,
+        ttl_sec=TTL_MENU_SEC,
+    )
 
 
 @router.callback_query(F.data.startswith("cab:export_do:"))
-async def cab_export_do(callback: CallbackQuery, bot: Bot, sender: TelegramSafeSender):
-    if not await _check_admin(bot, callback.from_user.id):
+async def cab_export_do(callback: CallbackQuery, sender: TelegramSafeSender):
+    if not await _check_admin(sender, callback.from_user.id):
         await sender.answer(callback, "⛔️ Нет доступа", show_alert=True)
         return
     parts = callback.data.split(":")
@@ -162,7 +193,13 @@ async def cab_export_do(callback: CallbackQuery, bot: Bot, sender: TelegramSafeS
         leads, total = await repo.get_list(status=status, date_from=date_from, date_to=date_to, per_page=10000)
 
     if not leads:
-        await sender.answer(callback.message, "Нет заявок по выбранному фильтру.")
+        msg = await sender.answer(callback.message, "Нет заявок по выбранному фильтру.")
+        await sender.schedule_delete(
+            chat_id=msg.chat.id,
+            message_id=msg.message_id,
+            thread_id=msg.message_thread_id,
+            ttl_sec=TTL_MENU_SEC,
+        )
         return
 
     import io
@@ -228,6 +265,7 @@ async def cab_export_do(callback: CallbackQuery, bot: Bot, sender: TelegramSafeS
         document=BufferedInputFile(buffer.read(), filename=filename),
         caption=f"📤 Экспорт: {total} заявок\nФайл: {filename}",
         parse_mode=None,
+        ttl_sec=TTL_MENU_SEC,
     )
 
 
@@ -235,8 +273,8 @@ async def cab_export_do(callback: CallbackQuery, bot: Bot, sender: TelegramSafeS
 
 
 @router.callback_query(F.data == "cab:analytics")
-async def cab_analytics(callback: CallbackQuery, bot: Bot, sender: TelegramSafeSender):
-    if not await _check_admin(bot, callback.from_user.id):
+async def cab_analytics(callback: CallbackQuery, sender: TelegramSafeSender):
+    if not await _check_admin(sender, callback.from_user.id):
         await sender.answer(callback, "⛔️ Нет доступа", show_alert=True)
         return
     await sender.answer(callback)
@@ -246,7 +284,7 @@ async def cab_analytics(callback: CallbackQuery, bot: Bot, sender: TelegramSafeS
         InlineKeyboardButton(text="👥 Работа с заявками", callback_data="cab:analytics:activity"),
     )
     builder.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="cab:back"))
-    await sender.edit_message_text(
+    await sender.edit_text(
         chat_id=callback.message.chat.id,
         message_id=callback.message.message_id,
         text="📊 <b>Аналитика</b>\nВыберите режим:",
@@ -254,15 +292,21 @@ async def cab_analytics(callback: CallbackQuery, bot: Bot, sender: TelegramSafeS
         parse_mode="HTML",
         thread_id=callback.message.message_thread_id,
     )
+    await sender.schedule_delete(
+        chat_id=callback.message.chat.id,
+        message_id=callback.message.message_id,
+        thread_id=callback.message.message_thread_id,
+        ttl_sec=TTL_MENU_SEC,
+    )
 
 
 @router.callback_query(F.data.startswith("cab:analytics:conversion"))
-async def cab_analytics_conversion(callback: CallbackQuery, bot: Bot, sender: TelegramSafeSender):
-    if not await _check_admin(bot, callback.from_user.id):
+async def cab_analytics_conversion(callback: CallbackQuery, sender: TelegramSafeSender):
+    if not await _check_admin(sender, callback.from_user.id):
         await sender.answer(callback, "⛔️ Нет доступа", show_alert=True)
         return
     await sender.answer(callback)
-    await sender.edit_message_text(
+    await sender.edit_text(
         chat_id=callback.message.chat.id,
         message_id=callback.message.message_id,
         text="📈 <b>Конверсия</b>\nВыберите период:",
@@ -270,11 +314,17 @@ async def cab_analytics_conversion(callback: CallbackQuery, bot: Bot, sender: Te
         parse_mode="HTML",
         thread_id=callback.message.message_thread_id,
     )
+    await sender.schedule_delete(
+        chat_id=callback.message.chat.id,
+        message_id=callback.message.message_id,
+        thread_id=callback.message.message_thread_id,
+        ttl_sec=TTL_MENU_SEC,
+    )
 
 
 @router.callback_query(F.data.startswith("cab:analytics_conversion:"))
-async def cab_analytics_conversion_period(callback: CallbackQuery, bot: Bot, sender: TelegramSafeSender):
-    if not await _check_admin(bot, callback.from_user.id):
+async def cab_analytics_conversion_period(callback: CallbackQuery, sender: TelegramSafeSender):
+    if not await _check_admin(sender, callback.from_user.id):
         await sender.answer(callback, "⛔️ Нет доступа", show_alert=True)
         return
     await sender.answer(callback)
@@ -305,15 +355,21 @@ async def cab_analytics_conversion_period(callback: CallbackQuery, bot: Bot, sen
         text="\n".join(lines),
         thread_id=callback.message.message_thread_id,
     )
+    await sender.schedule_delete(
+        chat_id=callback.message.chat.id,
+        message_id=callback.message.message_id,
+        thread_id=callback.message.message_thread_id,
+        ttl_sec=TTL_MENU_SEC,
+    )
 
 
 @router.callback_query(F.data.startswith("cab:analytics:activity"))
-async def cab_analytics_activity(callback: CallbackQuery, bot: Bot, sender: TelegramSafeSender):
-    if not await _check_admin(bot, callback.from_user.id):
+async def cab_analytics_activity(callback: CallbackQuery, sender: TelegramSafeSender):
+    if not await _check_admin(sender, callback.from_user.id):
         await sender.answer(callback, "⛔️ Нет доступа", show_alert=True)
         return
     await sender.answer(callback)
-    await sender.edit_message_text(
+    await sender.edit_text(
         chat_id=callback.message.chat.id,
         message_id=callback.message.message_id,
         text="👥 <b>Работа с заявками</b>\nВыберите период:",
@@ -321,11 +377,17 @@ async def cab_analytics_activity(callback: CallbackQuery, bot: Bot, sender: Tele
         parse_mode="HTML",
         thread_id=callback.message.message_thread_id,
     )
+    await sender.schedule_delete(
+        chat_id=callback.message.chat.id,
+        message_id=callback.message.message_id,
+        thread_id=callback.message.message_thread_id,
+        ttl_sec=TTL_MENU_SEC,
+    )
 
 
 @router.callback_query(F.data.startswith("cab:analytics_activity:"))
-async def cab_analytics_activity_period(callback: CallbackQuery, bot: Bot, sender: TelegramSafeSender):
-    if not await _check_admin(bot, callback.from_user.id):
+async def cab_analytics_activity_period(callback: CallbackQuery, sender: TelegramSafeSender):
+    if not await _check_admin(sender, callback.from_user.id):
         await sender.answer(callback, "⛔️ Нет доступа", show_alert=True)
         return
     await sender.answer(callback)
@@ -339,7 +401,7 @@ async def cab_analytics_activity_period(callback: CallbackQuery, bot: Bot, sende
     for m in managers:
         builder.row(InlineKeyboardButton(text=m.name, callback_data=f"cab:analytics_activity_run:{period}:{m.id}"))
     builder.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="cab:back"))
-    await sender.edit_message_text(
+    await sender.edit_text(
         chat_id=callback.message.chat.id,
         message_id=callback.message.message_id,
         text="Выберите сотрудника:",
@@ -347,11 +409,17 @@ async def cab_analytics_activity_period(callback: CallbackQuery, bot: Bot, sende
         parse_mode="HTML",
         thread_id=callback.message.message_thread_id,
     )
+    await sender.schedule_delete(
+        chat_id=callback.message.chat.id,
+        message_id=callback.message.message_id,
+        thread_id=callback.message.message_thread_id,
+        ttl_sec=TTL_MENU_SEC,
+    )
 
 
 @router.callback_query(F.data.startswith("cab:analytics_activity_run:"))
-async def cab_analytics_activity_run(callback: CallbackQuery, bot: Bot, sender: TelegramSafeSender):
-    if not await _check_admin(bot, callback.from_user.id):
+async def cab_analytics_activity_run(callback: CallbackQuery, sender: TelegramSafeSender):
+    if not await _check_admin(sender, callback.from_user.id):
         await sender.answer(callback, "⛔️ Нет доступа", show_alert=True)
         return
     await sender.answer(callback)
@@ -382,6 +450,12 @@ async def cab_analytics_activity_run(callback: CallbackQuery, bot: Bot, sender: 
         text="\n".join(lines),
         thread_id=callback.message.message_thread_id,
     )
+    await sender.schedule_delete(
+        chat_id=callback.message.chat.id,
+        message_id=callback.message.message_id,
+        thread_id=callback.message.message_thread_id,
+        ttl_sec=TTL_MENU_SEC,
+    )
 
 
 def _pct(part: int, total: int) -> str:
@@ -394,8 +468,8 @@ def _pct(part: int, total: int) -> str:
 
 
 @router.callback_query(F.data == "cab:integrations")
-async def cab_integrations(callback: CallbackQuery, bot: Bot, sender: TelegramSafeSender):
-    if not await _check_admin(bot, callback.from_user.id):
+async def cab_integrations(callback: CallbackQuery, sender: TelegramSafeSender):
+    if not await _check_admin(sender, callback.from_user.id):
         await sender.answer(callback, "⛔️ Нет доступа", show_alert=True)
         return
     await sender.answer(callback)
@@ -413,13 +487,19 @@ async def cab_integrations(callback: CallbackQuery, bot: Bot, sender: TelegramSa
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text="📋 Скопировать URL", callback_data="cab:copy_webhook"))
     builder.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="cab:back"))
-    await sender.edit_message_text(
+    await sender.edit_text(
         chat_id=callback.message.chat.id,
         message_id=callback.message.message_id,
         text=text,
         reply_markup=builder.as_markup(),
         parse_mode="HTML",
         thread_id=callback.message.message_thread_id,
+    )
+    await sender.schedule_delete(
+        chat_id=callback.message.chat.id,
+        message_id=callback.message.message_id,
+        thread_id=callback.message.message_thread_id,
+        ttl_sec=TTL_MENU_SEC,
     )
     try:
         snippet = FSInputFile("integrations/tilda_snippet.js")
@@ -429,28 +509,31 @@ async def cab_integrations(callback: CallbackQuery, bot: Bot, sender: TelegramSa
             document=snippet,
             caption="JS-сниппет для Tilda",
             parse_mode=None,
+            ttl_sec=TTL_MENU_SEC,
         )
     except Exception:
-        await sender.send_text(
+        await sender.send_ephemeral_text(
             chat_id=callback.message.chat.id,
             message_thread_id=callback.message.message_thread_id,
             text="Не удалось отправить файл JS-сниппета. Проверьте integrations/tilda_snippet.js",
+            ttl_sec=TTL_ERROR_SEC,
         )
 
 
 @router.callback_query(F.data == "cab:copy_webhook")
-async def cab_copy_webhook(callback: CallbackQuery, bot: Bot, sender: TelegramSafeSender):
-    if not await _check_admin(bot, callback.from_user.id):
+async def cab_copy_webhook(callback: CallbackQuery, sender: TelegramSafeSender):
+    if not await _check_admin(sender, callback.from_user.id):
         await sender.answer(callback)
         return
     await sender.answer(callback)
     raw_domain = (settings.public_domain or "YOUR_DOMAIN").strip()
     domain = raw_domain.replace("https://", "").replace("http://", "").strip("/") or "YOUR_DOMAIN"
     url = f"https://{domain}/api/v1/leads/tilda"
-    await sender.send_text(
+    await sender.send_ephemeral_text(
         chat_id=callback.message.chat.id,
         message_thread_id=callback.message.message_thread_id,
         text=url,
+        ttl_sec=TTL_MENU_SEC,
     )
 
 
@@ -458,12 +541,12 @@ async def cab_copy_webhook(callback: CallbackQuery, bot: Bot, sender: TelegramSa
 
 
 @router.callback_query(F.data == "cab:tariff")
-async def cab_tariff(callback: CallbackQuery, bot: Bot, sender: TelegramSafeSender):
-    if not await _check_admin(bot, callback.from_user.id):
+async def cab_tariff(callback: CallbackQuery, sender: TelegramSafeSender):
+    if not await _check_admin(sender, callback.from_user.id):
         await sender.answer(callback, "⛔️ Нет доступа", show_alert=True)
         return
     await sender.answer(callback)
-    await sender.edit_message_text(
+    await sender.edit_text(
         chat_id=callback.message.chat.id,
         message_id=callback.message.message_id,
         text='💳 Текущий тариф: Базовый\nЗаявок в месяц: без ограничений\nПоддержка: @support_username',
@@ -471,4 +554,10 @@ async def cab_tariff(callback: CallbackQuery, bot: Bot, sender: TelegramSafeSend
             InlineKeyboardButton(text="⬅️ Назад", callback_data="cab:back")
         ).as_markup(),
         thread_id=callback.message.message_thread_id,
+    )
+    await sender.schedule_delete(
+        chat_id=callback.message.chat.id,
+        message_id=callback.message.message_id,
+        thread_id=callback.message.message_thread_id,
+        ttl_sec=TTL_MENU_SEC,
     )

@@ -9,6 +9,13 @@ from aiogram.types import CallbackQuery, Message, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from loguru import logger
 
+from app.bot.constants.ttl import TTL_MENU_SEC, TTL_ERROR_SEC
+from app.bot.utils.force_reply import (
+    start_force_reply,
+    reject_non_force_reply,
+    cleanup_force_reply,
+    delete_force_reply_prompt,
+)
 from app.bot.keyboards.lead_keyboards import make_reject_reason_keyboard, make_reminder_keyboard
 from app.bot.utils.menu_cleanup import cleanup_inline_menu, cleanup_inline_menu_by_id
 from app.bot.ui.message_ref import MessageRef
@@ -144,7 +151,7 @@ async def handle_lead_action(callback: CallbackQuery, state: FSMContext, sender:
             await state.set_state(AmountState.waiting_for_amount)
             await state.update_data(lead_id=lead_id, message_ref=source_ref.to_dict() if source_ref else None)
             await sender.answer(callback)
-            await sender.reply(callback.message, "Введите сумму сделки (руб.):")
+            await start_force_reply(callback, state, sender, "Введите сумму сделки (руб.):")
             return
 
         if action == "success":
@@ -168,10 +175,12 @@ async def handle_lead_action(callback: CallbackQuery, state: FSMContext, sender:
             await state.set_state(RejectState.waiting_for_reason)
             await state.update_data(lead_id=lead_id, message_ref=source_ref.to_dict() if source_ref else None)
             await sender.answer(callback)
-            await sender.reply(
-                callback.message,
-                "Укажите причину отказа:",
+            await sender.send_ephemeral_text(
+                chat_id=callback.message.chat.id,
+                message_thread_id=callback.message.message_thread_id,
+                text="Укажите причину отказа:",
                 reply_markup=make_reject_reason_keyboard(lead_id),
+                ttl_sec=TTL_MENU_SEC,
             )
             return
 
@@ -190,7 +199,8 @@ async def handle_lead_action(callback: CallbackQuery, state: FSMContext, sender:
             if reason_key == "custom":
                 await state.set_state(RejectState.waiting_for_custom_reason)
                 await sender.answer(callback)
-                await sender.reply(callback.message, "Введите свою причину отказа:")
+                await cleanup_inline_menu(callback, sender)
+                await start_force_reply(callback, state, sender, "Введите свою причину отказа:")
                 return
 
             reason = REJECT_REASON_LABELS.get(reason_key)
@@ -207,7 +217,8 @@ async def handle_lead_action(callback: CallbackQuery, state: FSMContext, sender:
             if lead:
                 await session.commit()
                 await state.clear()
-                await sender.answer(callback, "❌ Заявка отклонена")
+                await sender.answer(callback, "Готово ✅")
+                await cleanup_inline_menu(callback, sender)
                 return
             await sender.answer(callback, "⚠️ Не удалось отклонить заявку.", show_alert=True)
             return
@@ -233,7 +244,7 @@ async def handle_lead_action(callback: CallbackQuery, state: FSMContext, sender:
             await state.set_state(NoteState.waiting_for_text)
             await state.update_data(lead_id=lead_id, message_ref=source_ref.to_dict() if source_ref else None)
             await sender.answer(callback)
-            await sender.reply(callback.message, "Введите заметку:")
+            await start_force_reply(callback, state, sender, "Введите заметку:")
             return
 
         if action == "remind":
@@ -242,10 +253,12 @@ async def handle_lead_action(callback: CallbackQuery, state: FSMContext, sender:
                 await sender.answer(callback, NO_ACCESS_TEXT, show_alert=True)
                 return
             await sender.answer(callback)
-            menu_msg = await sender.reply(
-                callback.message,
-                "Когда напомнить?",
+            menu_msg = await sender.send_ephemeral_text(
+                chat_id=callback.message.chat.id,
+                message_thread_id=callback.message.message_thread_id,
+                text="Когда напомнить?",
                 reply_markup=make_reminder_keyboard(lead_id),
+                ttl_sec=TTL_MENU_SEC,
             )
             await state.update_data(
                 reminder_menu_chat_id=menu_msg.chat.id,
@@ -272,7 +285,8 @@ async def handle_lead_action(callback: CallbackQuery, state: FSMContext, sender:
                     reminder_menu_thread_id=callback.message.message_thread_id if callback.message else None,
                 )
                 await sender.answer(callback)
-                await sender.reply(callback.message, "Введите дату и время (ДД.ММ.ГГГГ ЧЧ:ММ):")
+                await cleanup_inline_menu(callback, sender)
+                await start_force_reply(callback, state, sender, "Введите дату и время (ДД.ММ.ГГГГ ЧЧ:ММ):")
                 return
 
             now = datetime.now()
@@ -293,7 +307,7 @@ async def handle_lead_action(callback: CallbackQuery, state: FSMContext, sender:
             )
             await session.commit()
             if reminder:
-                await sender.answer(callback, "Напоминание установлено ✅")
+                await sender.answer(callback, "Готово ✅")
                 await cleanup_inline_menu(callback, sender)
             else:
                 await sender.answer(callback, "⚠️ Не удалось поставить напоминание.", show_alert=True)
@@ -307,16 +321,32 @@ async def handle_amount_input(message: Message, state: FSMContext, sender: Teleg
     if message.chat.id != settings.crm_group_id:
         await state.clear()
         return
+    if not await reject_non_force_reply(message, state, sender):
+        return
 
     amount = _parse_amount(message.text or "")
     if amount is None:
-        await sender.reply(message, "Введите корректную сумму (число больше 0).")
+        try:
+            await sender.delete_message(
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                thread_id=message.message_thread_id,
+            )
+        except Exception:
+            pass
+        await sender.send_ephemeral_text(
+            chat_id=message.chat.id,
+            message_thread_id=message.message_thread_id,
+            text="Введите корректную сумму (число больше 0).",
+            ttl_sec=TTL_ERROR_SEC,
+        )
         return
 
     data = await state.get_data()
     lead_id = data.get("lead_id")
     target_ref = MessageRef.from_dict(data.get("message_ref"))
     if not lead_id:
+        await cleanup_force_reply(sender, state, message)
         await state.clear()
         return
 
@@ -324,11 +354,18 @@ async def handle_amount_input(message: Message, state: FSMContext, sender: Teleg
         repo = LeadRepository(session)
         manager = await _get_manager(repo, message.from_user.id)
         if not manager:
+            await cleanup_force_reply(sender, state, message)
             await state.clear()
             return
         lead_obj = await repo.get_by_id(int(lead_id))
         if not lead_obj or not _manager_can_act(manager, lead_obj):
-            await sender.reply(message, NO_ACCESS_TEXT)
+            await cleanup_force_reply(sender, state, message)
+            await sender.send_ephemeral_text(
+                chat_id=message.chat.id,
+                message_thread_id=message.message_thread_id,
+                text=NO_ACCESS_TEXT,
+                ttl_sec=TTL_ERROR_SEC,
+            )
             await state.clear()
             return
 
@@ -336,10 +373,15 @@ async def handle_amount_input(message: Message, state: FSMContext, sender: Teleg
         lead = await service.mark_paid(int(lead_id), message.from_user.id, amount, target_ref)
         if lead:
             await session.commit()
-            await sender.reply(message, "💳 Заявка переведена в «Оплачено».")
         else:
-            await sender.reply(message, "⚠️ Не удалось перевести заявку в «Оплачено».")
+            await sender.send_ephemeral_text(
+                chat_id=message.chat.id,
+                message_thread_id=message.message_thread_id,
+                text="⚠️ Не удалось перевести заявку в «Оплачено».",
+                ttl_sec=TTL_ERROR_SEC,
+            )
 
+    await cleanup_force_reply(sender, state, message)
     await state.clear()
 
 
@@ -348,16 +390,32 @@ async def handle_custom_reject(message: Message, state: FSMContext, sender: Tele
     if message.chat.id != settings.crm_group_id:
         await state.clear()
         return
+    if not await reject_non_force_reply(message, state, sender):
+        return
 
     reason = (message.text or "").strip()
     if not reason:
-        await sender.reply(message, "Введите причину отказа.")
+        try:
+            await sender.delete_message(
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                thread_id=message.message_thread_id,
+            )
+        except Exception:
+            pass
+        await sender.send_ephemeral_text(
+            chat_id=message.chat.id,
+            message_thread_id=message.message_thread_id,
+            text="Введите причину отказа.",
+            ttl_sec=TTL_ERROR_SEC,
+        )
         return
 
     data = await state.get_data()
     lead_id = data.get("lead_id")
     target_ref = MessageRef.from_dict(data.get("message_ref"))
     if not lead_id:
+        await cleanup_force_reply(sender, state, message)
         await state.clear()
         return
 
@@ -365,11 +423,18 @@ async def handle_custom_reject(message: Message, state: FSMContext, sender: Tele
         repo = LeadRepository(session)
         manager = await _get_manager(repo, message.from_user.id)
         if not manager:
+            await cleanup_force_reply(sender, state, message)
             await state.clear()
             return
         lead_obj = await repo.get_by_id(int(lead_id))
         if not lead_obj or not _manager_can_act(manager, lead_obj):
-            await sender.reply(message, NO_ACCESS_TEXT)
+            await cleanup_force_reply(sender, state, message)
+            await sender.send_ephemeral_text(
+                chat_id=message.chat.id,
+                message_thread_id=message.message_thread_id,
+                text=NO_ACCESS_TEXT,
+                ttl_sec=TTL_ERROR_SEC,
+            )
             await state.clear()
             return
 
@@ -377,10 +442,15 @@ async def handle_custom_reject(message: Message, state: FSMContext, sender: Tele
         lead = await service.reject_lead(int(lead_id), message.from_user.id, reason=reason, source_ref=target_ref)
         if lead:
             await session.commit()
-            await sender.reply(message, "❌ Заявка отклонена.")
         else:
-            await sender.reply(message, "⚠️ Не удалось отклонить заявку.")
+            await sender.send_ephemeral_text(
+                chat_id=message.chat.id,
+                message_thread_id=message.message_thread_id,
+                text="⚠️ Не удалось отклонить заявку.",
+                ttl_sec=TTL_ERROR_SEC,
+            )
 
+    await cleanup_force_reply(sender, state, message)
     await state.clear()
 
 
@@ -389,16 +459,32 @@ async def handle_note_text(message: Message, state: FSMContext, sender: Telegram
     if message.chat.id != settings.crm_group_id:
         await state.clear()
         return
+    if not await reject_non_force_reply(message, state, sender):
+        return
 
     text = (message.text or "").strip()
     if not text:
-        await sender.reply(message, "Введите текст заметки.")
+        try:
+            await sender.delete_message(
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                thread_id=message.message_thread_id,
+            )
+        except Exception:
+            pass
+        await sender.send_ephemeral_text(
+            chat_id=message.chat.id,
+            message_thread_id=message.message_thread_id,
+            text="Введите текст заметки.",
+            ttl_sec=TTL_ERROR_SEC,
+        )
         return
 
     data = await state.get_data()
     lead_id = data.get("lead_id")
     target_ref = MessageRef.from_dict(data.get("message_ref"))
     if not lead_id:
+        await cleanup_force_reply(sender, state, message)
         await state.clear()
         return
 
@@ -406,11 +492,18 @@ async def handle_note_text(message: Message, state: FSMContext, sender: Telegram
         repo = LeadRepository(session)
         manager = await _get_manager(repo, message.from_user.id)
         if not manager:
+            await cleanup_force_reply(sender, state, message)
             await state.clear()
             return
         lead_obj = await repo.get_by_id(int(lead_id))
         if not lead_obj or not _manager_can_act(manager, lead_obj):
-            await sender.reply(message, NO_ACCESS_TEXT)
+            await cleanup_force_reply(sender, state, message)
+            await sender.send_ephemeral_text(
+                chat_id=message.chat.id,
+                message_thread_id=message.message_thread_id,
+                text=NO_ACCESS_TEXT,
+                ttl_sec=TTL_ERROR_SEC,
+            )
             await state.clear()
             return
 
@@ -423,6 +516,7 @@ async def handle_note_text(message: Message, state: FSMContext, sender: Telegram
         )
         await session.commit()
 
+    await cleanup_force_reply(sender, state, message)
     await state.clear()
 
 
@@ -431,10 +525,25 @@ async def handle_custom_reminder_time(message: Message, state: FSMContext, sende
     if message.chat.id != settings.crm_group_id:
         await state.clear()
         return
+    if not await reject_non_force_reply(message, state, sender):
+        return
 
     remind_at = _parse_custom_datetime(message.text or "")
     if not remind_at:
-        await sender.reply(message, "Некорректный формат. Пример: 28.02.2026 14:30")
+        try:
+            await sender.delete_message(
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                thread_id=message.message_thread_id,
+            )
+        except Exception:
+            pass
+        await sender.send_ephemeral_text(
+            chat_id=message.chat.id,
+            message_thread_id=message.message_thread_id,
+            text="Некорректный формат. Пример: 28.02.2026 14:30",
+            ttl_sec=TTL_ERROR_SEC,
+        )
         return
 
     data = await state.get_data()
@@ -443,6 +552,7 @@ async def handle_custom_reminder_time(message: Message, state: FSMContext, sende
     menu_message_id = data.get("reminder_menu_id")
     menu_thread_id = data.get("reminder_menu_thread_id")
     if not lead_id:
+        await cleanup_force_reply(sender, state, message)
         await state.clear()
         return
 
@@ -450,11 +560,18 @@ async def handle_custom_reminder_time(message: Message, state: FSMContext, sende
         repo = LeadRepository(session)
         manager = await _get_manager(repo, message.from_user.id)
         if not manager:
+            await cleanup_force_reply(sender, state, message)
             await state.clear()
             return
         lead_obj = await repo.get_by_id(int(lead_id))
         if not lead_obj or not _manager_can_act(manager, lead_obj):
-            await sender.reply(message, NO_ACCESS_TEXT)
+            await cleanup_force_reply(sender, state, message)
+            await sender.send_ephemeral_text(
+                chat_id=message.chat.id,
+                message_thread_id=message.message_thread_id,
+                text=NO_ACCESS_TEXT,
+                ttl_sec=TTL_ERROR_SEC,
+            )
             await state.clear()
             return
 
@@ -472,8 +589,14 @@ async def handle_custom_reminder_time(message: Message, state: FSMContext, sende
                 thread_id=menu_thread_id,
             )
         else:
-            await sender.reply(message, "⚠️ Не удалось поставить напоминание.")
+            await sender.send_ephemeral_text(
+                chat_id=message.chat.id,
+                message_thread_id=message.message_thread_id,
+                text="⚠️ Не удалось поставить напоминание.",
+                ttl_sec=TTL_ERROR_SEC,
+            )
 
+    await cleanup_force_reply(sender, state, message)
     await state.clear()
 
 
@@ -492,6 +615,14 @@ async def handle_reply_note(message: Message, sender: TelegramSafeSender):
         repo = LeadRepository(session)
         manager = await _get_manager(repo, message.from_user.id)
         if not manager:
+            try:
+                await sender.delete_message(
+                    chat_id=message.chat.id,
+                    message_id=message.message_id,
+                    thread_id=message.message_thread_id,
+                )
+            except Exception:
+                pass
             return
 
         record = await repo.get_card_message(target_ref.chat_id, target_ref.message_id)
@@ -512,7 +643,20 @@ async def handle_reply_note(message: Message, sender: TelegramSafeSender):
 
         lead_obj = await repo.get_by_id(lead_id)
         if not lead_obj or not _manager_can_act(manager, lead_obj):
-            await sender.reply(message, NO_ACCESS_TEXT)
+            try:
+                await sender.delete_message(
+                    chat_id=message.chat.id,
+                    message_id=message.message_id,
+                    thread_id=message.message_thread_id,
+                )
+            except Exception:
+                pass
+            await sender.send_ephemeral_text(
+                chat_id=message.chat.id,
+                message_thread_id=message.message_thread_id,
+                text=NO_ACCESS_TEXT,
+                ttl_sec=TTL_ERROR_SEC,
+            )
             return
 
         service = LeadService(repo, sender)
@@ -523,6 +667,14 @@ async def handle_reply_note(message: Message, sender: TelegramSafeSender):
             target_ref=target_ref,
         )
         await session.commit()
+        try:
+            await sender.delete_message(
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                thread_id=message.message_thread_id,
+            )
+        except Exception:
+            pass
 
 
 # ── Меню топика / Создание заявки ───────────────────────────────
@@ -539,7 +691,8 @@ async def handle_create_lead(callback: CallbackQuery, state: FSMContext, sender:
 
     await state.set_state(CreateLeadState.waiting_for_name)
     await sender.answer(callback)
-    await sender.reply(callback.message, "Введите имя клиента:")
+    await cleanup_inline_menu(callback, sender)
+    await start_force_reply(callback, state, sender, "Введите имя клиента:")
 
 
 @router.message(CreateLeadState.waiting_for_name)
@@ -547,13 +700,29 @@ async def handle_create_lead_name(message: Message, state: FSMContext, sender: T
     if message.chat.id != settings.crm_group_id:
         await state.clear()
         return
+    if not await reject_non_force_reply(message, state, sender):
+        return
     name = (message.text or "").strip()
     if not name:
-        await sender.reply(message, "Введите имя клиента.")
+        try:
+            await sender.delete_message(
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                thread_id=message.message_thread_id,
+            )
+        except Exception:
+            pass
+        await sender.send_ephemeral_text(
+            chat_id=message.chat.id,
+            message_thread_id=message.message_thread_id,
+            text="Введите имя клиента.",
+            ttl_sec=TTL_ERROR_SEC,
+        )
         return
     await state.update_data(name=name)
     await state.set_state(CreateLeadState.waiting_for_phone)
-    await sender.reply(message, "Введите телефон клиента:")
+    await cleanup_force_reply(sender, state, message)
+    await start_force_reply(message, state, sender, "Введите телефон клиента:")
 
 
 @router.message(CreateLeadState.waiting_for_phone)
@@ -561,27 +730,39 @@ async def handle_create_lead_phone(message: Message, state: FSMContext, sender: 
     if message.chat.id != settings.crm_group_id:
         await state.clear()
         return
+    if not await reject_non_force_reply(message, state, sender):
+        return
     phone = (message.text or "").strip()
     if not phone:
-        await sender.reply(message, "Введите телефон клиента.")
+        try:
+            await sender.delete_message(
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                thread_id=message.message_thread_id,
+            )
+        except Exception:
+            pass
+        await sender.send_ephemeral_text(
+            chat_id=message.chat.id,
+            message_thread_id=message.message_thread_id,
+            text="Введите телефон клиента.",
+            ttl_sec=TTL_ERROR_SEC,
+        )
         return
     await state.update_data(phone=phone)
     await state.set_state(CreateLeadState.waiting_for_email)
-    builder = InlineKeyboardBuilder().row(
-        InlineKeyboardButton(text="Пропустить", callback_data="create:skip:email")
-    )
-    await sender.reply(message, "Введите почту клиента (или пропустите):", reply_markup=builder.as_markup())
+    await cleanup_force_reply(sender, state, message)
+    await start_force_reply(message, state, sender, "Введите почту клиента (или напишите skip):")
 
 
 @router.callback_query(F.data == "create:skip:email")
 async def handle_skip_email(callback: CallbackQuery, state: FSMContext, sender: TelegramSafeSender):
     await state.update_data(email=None)
     await state.set_state(CreateLeadState.waiting_for_service)
-    builder = InlineKeyboardBuilder().row(
-        InlineKeyboardButton(text="Пропустить", callback_data="create:skip:service")
-    )
     await sender.answer(callback)
-    await sender.reply(callback.message, "Введите услугу (или пропустите):", reply_markup=builder.as_markup())
+    await cleanup_inline_menu(callback, sender)
+    await delete_force_reply_prompt(sender, state)
+    await start_force_reply(callback, state, sender, "Введите услугу (или напишите skip):")
 
 
 @router.message(CreateLeadState.waiting_for_email)
@@ -589,13 +770,16 @@ async def handle_create_lead_email(message: Message, state: FSMContext, sender: 
     if message.chat.id != settings.crm_group_id:
         await state.clear()
         return
-    email = (message.text or "").strip()
-    await state.update_data(email=email if email else None)
+    if not await reject_non_force_reply(message, state, sender):
+        return
+    email_raw = (message.text or "").strip()
+    email_value = None
+    if email_raw and email_raw.lower() not in {"skip", "-", "пропустить"}:
+        email_value = email_raw
+    await state.update_data(email=email_value)
     await state.set_state(CreateLeadState.waiting_for_service)
-    builder = InlineKeyboardBuilder().row(
-        InlineKeyboardButton(text="Пропустить", callback_data="create:skip:service")
-    )
-    await sender.reply(message, "Введите услугу (или пропустите):", reply_markup=builder.as_markup())
+    await cleanup_force_reply(sender, state, message)
+    await start_force_reply(message, state, sender, "Введите услугу (или напишите skip):")
 
 
 @router.callback_query(F.data == "create:skip:service")
@@ -603,7 +787,9 @@ async def handle_skip_service(callback: CallbackQuery, state: FSMContext, sender
     await state.update_data(service=None)
     await state.set_state(CreateLeadState.waiting_for_comment)
     await sender.answer(callback)
-    await sender.reply(callback.message, "Введите комментарий:")
+    await cleanup_inline_menu(callback, sender)
+    await delete_force_reply_prompt(sender, state)
+    await start_force_reply(callback, state, sender, "Введите комментарий:")
 
 
 @router.message(CreateLeadState.waiting_for_service)
@@ -611,10 +797,16 @@ async def handle_create_lead_service(message: Message, state: FSMContext, sender
     if message.chat.id != settings.crm_group_id:
         await state.clear()
         return
-    service = (message.text or "").strip()
-    await state.update_data(service=service if service else None)
+    if not await reject_non_force_reply(message, state, sender):
+        return
+    service_raw = (message.text or "").strip()
+    service_value = None
+    if service_raw and service_raw.lower() not in {"skip", "-", "пропустить"}:
+        service_value = service_raw
+    await state.update_data(service=service_value)
     await state.set_state(CreateLeadState.waiting_for_comment)
-    await sender.reply(message, "Введите комментарий:")
+    await cleanup_force_reply(sender, state, message)
+    await start_force_reply(message, state, sender, "Введите комментарий:")
 
 
 @router.message(CreateLeadState.waiting_for_comment)
@@ -622,9 +814,24 @@ async def handle_create_lead_comment(message: Message, state: FSMContext, sender
     if message.chat.id != settings.crm_group_id:
         await state.clear()
         return
+    if not await reject_non_force_reply(message, state, sender):
+        return
     comment = (message.text or "").strip()
     if not comment:
-        await sender.reply(message, "Введите комментарий.")
+        try:
+            await sender.delete_message(
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                thread_id=message.message_thread_id,
+            )
+        except Exception:
+            pass
+        await sender.send_ephemeral_text(
+            chat_id=message.chat.id,
+            message_thread_id=message.message_thread_id,
+            text="Введите комментарий.",
+            ttl_sec=TTL_ERROR_SEC,
+        )
         return
 
     data = await state.get_data()
@@ -642,6 +849,7 @@ async def handle_create_lead_comment(message: Message, state: FSMContext, sender
         repo = LeadRepository(session)
         manager = await _get_manager(repo, message.from_user.id)
         if not manager:
+            await cleanup_force_reply(sender, state, message)
             await state.clear()
             return
 
@@ -649,11 +857,12 @@ async def handle_create_lead_comment(message: Message, state: FSMContext, sender
         lead = await service.create_lead(payload)
         await session.commit()
 
-    await sender.send_text(
+    await cleanup_force_reply(sender, state, message)
+    await sender.send_ephemeral_text(
         chat_id=message.chat.id,
         message_thread_id=message.message_thread_id,
-        text=f"✅ Заявка #{lead.id} создана.",
-        reply_to_message_id=message.message_id,
+        text=f"Заявка #{lead.id} создана.",
+        ttl_sec=TTL_MENU_SEC,
     )
     await state.clear()
 
@@ -685,7 +894,13 @@ async def handle_menu_period(callback: CallbackQuery, sender: TelegramSafeSender
                 InlineKeyboardButton(text="Месяц", callback_data=f"menu:period:{status_raw}:month"),
             )
             await sender.answer(callback)
-            await sender.reply(callback.message, "Выберите период:", reply_markup=builder.as_markup())
+            await sender.send_ephemeral_text(
+                chat_id=callback.message.chat.id,
+                message_thread_id=callback.message.message_thread_id,
+                text="Выберите период:",
+                reply_markup=builder.as_markup(),
+                ttl_sec=TTL_MENU_SEC,
+            )
             return
 
         period = parts[3]
@@ -704,9 +919,10 @@ async def handle_menu_period(callback: CallbackQuery, sender: TelegramSafeSender
 
     period_label = {"today": "сегодня", "week": "за неделю", "month": "за месяц"}[period]
     await sender.answer(callback)
-    await sender.send_text(
+    await cleanup_inline_menu(callback, sender)
+    await sender.send_ephemeral_text(
         chat_id=callback.message.chat.id,
         message_thread_id=callback.message.message_thread_id,
         text=f"Заявок {period_label}: {count}",
-        reply_to_message_id=callback.message.message_id,
+        ttl_sec=TTL_MENU_SEC,
     )

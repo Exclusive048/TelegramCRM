@@ -4,7 +4,7 @@ import asyncio
 import random
 import time
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, TYPE_CHECKING
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramRetryAfter, TelegramBadRequest
@@ -12,6 +12,9 @@ from aiogram.types import CallbackQuery, Message
 from loguru import logger
 
 from app.telegram.html_utils import html_escape
+
+if TYPE_CHECKING:
+    from app.services.message_deletion_service import MessageDeletionService
 
 @dataclass(frozen=True, slots=True)
 class RateKey:
@@ -53,11 +56,13 @@ class TelegramSafeSender:
         *,
         max_attempts: int = 6,
         jitter: float = 0.25,
+        deletion_service: "MessageDeletionService | None" = None,
     ):
         self.bot = bot
         self.limiter = limiter
         self.max_attempts = max_attempts
         self.jitter = jitter
+        self.deletion_service = deletion_service
 
     async def _call(
         self,
@@ -112,6 +117,17 @@ class TelegramSafeSender:
     def _rate_key(self, chat_id: int, thread_id: int | None) -> RateKey:
         return RateKey(chat_id=chat_id, thread_id=thread_id)
 
+    async def _call_chat(
+        self,
+        method: str,
+        chat_id: int,
+        thread_id: int | None,
+        func: Callable[..., Awaitable[Any]],
+        **kwargs: Any,
+    ) -> Any:
+        key = self._rate_key(chat_id, thread_id)
+        return await self._call(method, key, func, **kwargs)
+
     async def send_message(
         self,
         chat_id: int,
@@ -153,16 +169,40 @@ class TelegramSafeSender:
             **kwargs,
         )
 
+    async def send_ephemeral_text(
+        self,
+        chat_id: int,
+        text: str,
+        *,
+        ttl_sec: int,
+        message_thread_id: int | None = None,
+        **kwargs: Any,
+    ):
+        msg = await self.send_text(
+            chat_id=chat_id,
+            text=text,
+            message_thread_id=message_thread_id,
+            **kwargs,
+        )
+        await self.schedule_delete(
+            chat_id=msg.chat.id,
+            message_id=msg.message_id,
+            thread_id=msg.message_thread_id,
+            ttl_sec=ttl_sec,
+        )
+        return msg
+
     async def send_document(
         self,
         chat_id: int,
         document: Any,
         *,
+        ttl_sec: int | None = None,
         message_thread_id: int | None = None,
         **kwargs: Any,
     ):
         key = self._rate_key(chat_id, message_thread_id)
-        return await self._call(
+        msg = await self._call(
             "send_document",
             key,
             self.bot.send_document,
@@ -171,6 +211,14 @@ class TelegramSafeSender:
             message_thread_id=message_thread_id,
             **kwargs,
         )
+        if ttl_sec is not None:
+            await self.schedule_delete(
+                chat_id=msg.chat.id,
+                message_id=msg.message_id,
+                thread_id=msg.message_thread_id,
+                ttl_sec=ttl_sec,
+            )
+        return msg
 
     async def edit_message_text(
         self,
@@ -253,6 +301,33 @@ class TelegramSafeSender:
             **kwargs,
         )
 
+    async def schedule_delete(
+        self,
+        *,
+        chat_id: int,
+        message_id: int,
+        thread_id: int | None = None,
+        ttl_sec: int | None = None,
+        delete_at: float | None = None,
+    ) -> None:
+        if self.deletion_service is None:
+            logger.debug(
+                "delete_schedule_skipped chat_id={} message_id={} reason=no_service",
+                chat_id,
+                message_id,
+            )
+            return
+        if delete_at is None:
+            if ttl_sec is None:
+                raise ValueError("ttl_sec or delete_at is required")
+            delete_at = time.time() + float(ttl_sec)
+        await self.deletion_service.schedule(
+            chat_id=chat_id,
+            message_id=message_id,
+            thread_id=thread_id,
+            delete_at=delete_at,
+        )
+
     async def answer(
         self,
         event: Message | CallbackQuery,
@@ -260,7 +335,7 @@ class TelegramSafeSender:
         **kwargs: Any,
     ):
         if isinstance(event, Message):
-            return await self.send_message(
+            return await self.send_text(
                 chat_id=event.chat.id,
                 message_thread_id=event.message_thread_id,
                 text=text or "",
@@ -287,7 +362,7 @@ class TelegramSafeSender:
         text: str,
         **kwargs: Any,
     ):
-        return await self.send_message(
+        return await self.send_text(
             chat_id=message.chat.id,
             message_thread_id=message.message_thread_id,
             text=text,

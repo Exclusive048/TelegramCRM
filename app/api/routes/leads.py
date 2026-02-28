@@ -63,7 +63,7 @@ async def tilda_webhook(
 
     repo = LeadRepository(db)
     service = LeadService(repo, sender)
-    lead = await service.create_lead({k: v for k, v in lead_data.items() if v is not None})
+    await service.create_lead({k: v for k, v in lead_data.items() if v is not None})
     return OkResponse()
 
 
