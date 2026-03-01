@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, func
 from sqlalchemy.orm import selectinload
@@ -92,7 +92,7 @@ class LeadRepository:
         if reject_reason:
             lead.reject_reason = reject_reason
         if new_status in (LeadStatus.SUCCESS, LeadStatus.REJECTED):
-            lead.closed_at = datetime.utcnow()
+            lead.closed_at = datetime.now(timezone.utc)
 
         self.session.add(LeadHistory(
             lead_id=lead_id,
@@ -108,7 +108,7 @@ class LeadRepository:
         result = await self.session.execute(
             update(Lead)
             .where(Lead.id == lead_id, Lead.status == LeadStatus.NEW)
-            .values(status=LeadStatus.IN_PROGRESS, manager_id=manager_id)
+            .values(status=LeadStatus.IN_PROGRESS, manager_id=manager_id, updated_at=func.now())
             .returning(Lead.id)
         )
         updated_id = result.scalar_one_or_none()
@@ -243,7 +243,7 @@ class LeadRepository:
     async def set_tg_message(self, lead_id: int, message_id: int | None, topic_id: int | None):
         await self.session.execute(
             update(Lead).where(Lead.id == lead_id)
-            .values(tg_message_id=message_id, tg_topic_id=topic_id)
+            .values(tg_message_id=message_id, tg_topic_id=topic_id, updated_at=func.now())
         )
 
     # ── Lead card messages ───────────────────────────────────────────────────

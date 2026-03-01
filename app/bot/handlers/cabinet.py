@@ -349,11 +349,12 @@ async def cab_analytics_conversion_period(callback: CallbackQuery, sender: Teleg
         f"Отклонено: {s.get('rejected', 0)} ({_pct(s.get('rejected', 0), total)})",
     ]
 
-    await sender.edit_text(
+    await sender.edit_message_text(
         chat_id=callback.message.chat.id,
         message_id=callback.message.message_id,
         text="\n".join(lines),
         thread_id=callback.message.message_thread_id,
+        parse_mode="HTML",
     )
     await sender.schedule_delete(
         chat_id=callback.message.chat.id,
@@ -425,7 +426,10 @@ async def cab_analytics_activity_run(callback: CallbackQuery, sender: TelegramSa
     await sender.answer(callback)
     _, _, period, manager_raw = callback.data.split(":")
     date_from, date_to = _period_dates(period)
-    manager_id = None if manager_raw == "all" else int(manager_raw)
+    try:
+        manager_id = int(manager_raw)
+    except ValueError:
+        return await sender.answer(callback)
 
     async with AsyncSessionLocal() as session:
         repo = LeadRepository(session)
@@ -444,10 +448,11 @@ async def cab_analytics_activity_run(callback: CallbackQuery, sender: TelegramSa
         f"Отклонено: {s.get('rejected', 0)} ({_pct(s.get('rejected', 0), total)})",
     ]
 
-    await sender.edit_text(
+    await sender.edit_message_text(
         chat_id=callback.message.chat.id,
         message_id=callback.message.message_id,
         text="\n".join(lines),
+        parse_mode="HTML",
         thread_id=callback.message.message_thread_id,
     )
     await sender.schedule_delete(
@@ -549,7 +554,7 @@ async def cab_tariff(callback: CallbackQuery, sender: TelegramSafeSender):
     await sender.edit_text(
         chat_id=callback.message.chat.id,
         message_id=callback.message.message_id,
-        text='💳 Текущий тариф: Базовый\nЗаявок в месяц: без ограничений\nПоддержка: @support_username',
+        text='💳 Текущий тариф: StartupImpuls\nЗаявок в месяц: без ограничений\nПоддержка: @StartupImpuls',
         reply_markup=InlineKeyboardBuilder().row(
             InlineKeyboardButton(text="⬅️ Назад", callback_data="cab:back")
         ).as_markup(),

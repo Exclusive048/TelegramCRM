@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.date import DateTrigger
@@ -14,8 +14,15 @@ from app.db.repositories.lead_repository import LeadRepository
 from app.db.models.lead import LeadStatus
 from app.telegram.safe_sender import TelegramSafeSender
 
+import html
 
-_scheduler = AsyncIOScheduler()
+_scheduler = AsyncIOScheduler(
+    timezone='UTC',
+    job_defaults={
+        'misfire_grace_time': 3600,
+        'coalesce': True,
+    }
+)
 _scheduler_started = False
 
 
@@ -56,12 +63,12 @@ async def _send_reminder_job(reminder_id: int, sender: TelegramSafeSender):
 
         lines = [
             f"🔔 Напоминание по заявке #{lead.id}",
-            f"👤 {lead.name}",
-            f"📱 {lead.phone}",
+            f"👤 {html.escape(lead.name)}",
+            f"📱 {html.escape(lead.phone)}",
             f"Статус: {_status_label(lead.status)}",
         ]
         if reminder.message:
-            lines.append(f"Комментарий: {reminder.message}")
+            lines.append(f"Комментарий: {html.escape(reminder.message)}")
         if link:
             lines.append(f"Ссылка: {link}")
 
@@ -99,7 +106,7 @@ class ReminderService:
             _scheduler_started = True
         async with AsyncSessionLocal() as session:
             repo = LeadRepository(session)
-            now = datetime.now()
+            now = datetime.now(timezone.utc)
             reminders = await repo.get_pending_reminders()
             for reminder in reminders:
                 _schedule_job(reminder.id, reminder.remind_at, sender, now=now)
@@ -126,7 +133,7 @@ class ReminderService:
 
 
 def _schedule_job(reminder_id: int, remind_at: datetime, sender: TelegramSafeSender, *, now: datetime | None = None):
-    now = now or datetime.now()
+    now = now or datetime.now(timezone.utc)
     run_at = remind_at if remind_at > now else now + timedelta(seconds=1)
     job_id = f"reminder:{reminder_id}"
     trigger = DateTrigger(run_date=run_at)

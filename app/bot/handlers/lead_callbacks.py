@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+import email
 
 from aiogram import Router, F
 from aiogram.fsm.context import FSMContext
@@ -28,7 +29,9 @@ from app.services.reminder_service import ReminderService
 from app.telegram.safe_sender import TelegramSafeSender
 
 router = Router()
-
+import re
+PHONE_RE = re.compile(r'^[+7890][0-9\-\s]{6,19}$')
+EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
 
 class NoteState(StatesGroup):
     waiting_for_text = State()
@@ -733,7 +736,10 @@ async def handle_create_lead_phone(message: Message, state: FSMContext, sender: 
     if not await reject_non_force_reply(message, state, sender):
         return
     phone = (message.text or "").strip()
+    
     if not phone:
+        if not PHONE_RE.match(phone):
+            return await sender.send_ephemeral_text('❌ Некорректный номер телефона. Попробуй ещё раз.')
         try:
             await sender.delete_message(
                 chat_id=message.chat.id,
@@ -775,6 +781,8 @@ async def handle_create_lead_email(message: Message, state: FSMContext, sender: 
     email_raw = (message.text or "").strip()
     email_value = None
     if email_raw and email_raw.lower() not in {"skip", "-", "пропустить"}:
+        if not EMAIL_RE.match(email_raw):
+            return await sender.send_ephemeral_text('❌ Некорректный email. Попробуй ещё раз.')
         email_value = email_raw
     await state.update_data(email=email_value)
     await state.set_state(CreateLeadState.waiting_for_service)

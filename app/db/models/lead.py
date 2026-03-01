@@ -13,6 +13,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
+from sqlalchemy import Index
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
@@ -104,7 +105,10 @@ class Lead(Base):
         default=LeadStatus.NEW,
         server_default=LeadStatus.NEW.value,
     )
-
+    __table_args__ = (
+        Index('ix_leads_status', 'status'),
+        Index('ix_leads_created_at', 'created_at'),
+    )
     manager_id: Mapped[int | None] = mapped_column(ForeignKey("managers.id"), nullable=True)
     reject_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
