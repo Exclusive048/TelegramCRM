@@ -17,7 +17,8 @@ from app.telegram.safe_sender import TelegramSafeSender, ChatRateLimiter
 
 
 def create_app(bot: Bot, sender: TelegramSafeSender) -> FastAPI:
-    app = FastAPI(title="CRM Bot API", version="2.0.0", docs_url="/api/docs")
+    docs_url = '/api/docs' if settings.debug else None
+    app = FastAPI(docs_url=docs_url, redoc_url=None, title="TelegramCRM API", version="1.0")
     app.state.bot = bot
     app.state.sender = sender
     app.include_router(leads_router.router, prefix="/api/v1")

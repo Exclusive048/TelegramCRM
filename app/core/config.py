@@ -33,5 +33,6 @@ class Settings(BaseSettings):
     # ── Google Sheets ──────────────────────────────────────────
     google_service_account_file: str = "scripts/google_service_account.json"
 
+    tilda_secret: str = '' # Секрет для верификации запросов от Tilda, если не пустой
 
 settings = Settings()

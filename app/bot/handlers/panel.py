@@ -65,12 +65,6 @@ async def _safe_edit_panel_message(
             parse_mode="HTML",
             thread_id=topic_id,
         )
-        await sender.schedule_delete(
-            chat_id=chat_id,
-            message_id=message_id,
-            thread_id=topic_id,
-            ttl_sec=TTL_MENU_SEC,
-        )
         return message_id
     except TelegramBadRequest as e:
         msg = str(e).lower()
@@ -144,12 +138,6 @@ async def ensure_panel_message(sender: TelegramSafeSender, chat_id: int, topic_i
         )
         await repo.get_or_create_panel_message_id(chat_id, topic_id, msg.message_id)
         await session.commit()
-        await sender.schedule_delete(
-            chat_id=chat_id,
-            message_id=msg.message_id,
-            thread_id=topic_id,
-            ttl_sec=TTL_MENU_SEC,
-        )
         await _pin_panel_message(sender, chat_id, topic_id, msg.message_id)
         return msg.message_id
 

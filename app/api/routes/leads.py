@@ -1,3 +1,5 @@
+from curses import raw
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime
@@ -12,9 +14,10 @@ from app.api.schemas.lead_schemas import (
 )
 from app.api.deps import verify_api_key, get_current_sender
 from app.services.lead_service import LeadService
+from app.core.config import settings
 
 router = APIRouter(prefix="/leads", tags=["Leads"])
-
+MAX_EXTRA_KEYS = 20
 
 # ── POST /leads ───────────────────────────────────────
 
@@ -46,7 +49,9 @@ async def tilda_webhook(
     """
     form = await request.form()
     data = dict(form)
-
+    if settings.tilda_secret:
+        if data.get('tilda_secret') != settings.tilda_secret:
+            raise HTTPException(403, 'Invalid tilda secret')
     # Маппинг типичных полей Tilda → наши поля
     lead_data = {
         "name":    data.get("Name") or data.get("name") or data.get("NAME") or "—",
@@ -56,9 +61,8 @@ async def tilda_webhook(
         "service": data.get("Service") or data.get("service") or None,
         "utm_campaign": data.get("utm_campaign") or data.get("UTM_CAMPAIGN") or None,
         "utm_source":   data.get("utm_source") or None,
-        "extra": {k: v for k, v in data.items() if k.lower() not in
-                  ("name", "phone", "comment", "message", "service", "utm_campaign", "utm_source",
-                   "formid", "formname", "tranid")} or None,
+        "extra": {k: str(v)[:500] for k, v in list(raw.items())[:MAX_EXTRA_KEYS] if k not in 
+                  {"Name", "Phone", "Comment", "Message", "Service", "utm_campaign", "utm_source", "formid", "formname", "tranid"}} or None,
     }
 
     repo = LeadRepository(db)
