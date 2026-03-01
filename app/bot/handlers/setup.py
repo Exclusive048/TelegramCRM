@@ -179,7 +179,7 @@ async def cmd_add_manager(message: Message, sender: TelegramSafeSender):
         await sender.send_ephemeral_text(
             chat_id=message.chat.id,
             message_thread_id=message.message_thread_id,
-            text="№️⃣ Ответьте на сообщение участника командой /add_manager.",
+            text="👆 Ответьте на сообщение участника командой /add_manager.",  # FIXED #15
             ttl_sec=TTL_ERROR_SEC,
         )
         return
@@ -195,7 +195,7 @@ async def cmd_add_manager(message: Message, sender: TelegramSafeSender):
                 await sender.send_ephemeral_text(
                     chat_id=message.chat.id,
                     message_thread_id=message.message_thread_id,
-                    text=f"№ {target.full_name} уже является менеджером.",
+                    text=f"ℹ️ {target.full_name} уже является менеджером.",  # FIXED #15
                     ttl_sec=TTL_MENU_SEC,
                 )
             else:
@@ -257,7 +257,7 @@ async def cmd_make_admin(message: Message, sender: TelegramSafeSender):
         await sender.send_ephemeral_text(
             chat_id=message.chat.id,
             message_thread_id=message.message_thread_id,
-            text="№️⃣ Ответьте на сообщение пользователя командой /make_admin.",
+            text="👆 Ответьте на сообщение пользователя командой /make_admin.",  # FIXED #15
             ttl_sec=TTL_ERROR_SEC,
         )
         return
@@ -313,7 +313,7 @@ async def cmd_remove_manager(message: Message, sender: TelegramSafeSender):
         await sender.send_ephemeral_text(
             chat_id=message.chat.id,
             message_thread_id=message.message_thread_id,
-            text="№️⃣ Ответьте на сообщение пользователя командой /remove_manager.",
+            text="👆 Ответьте на сообщение пользователя командой /remove_manager.",  # FIXED #15
             ttl_sec=TTL_ERROR_SEC,
         )
         return
@@ -336,7 +336,7 @@ async def cmd_remove_manager(message: Message, sender: TelegramSafeSender):
         await sender.send_ephemeral_text(
             chat_id=message.chat.id,
             message_thread_id=message.message_thread_id,
-            text=f"№ {target.full_name} не найден в списке менеджеров.",
+            text=f"ℹ️ {target.full_name} не найден в списке менеджеров.",  # FIXED #15
             ttl_sec=TTL_MENU_SEC,
         )
     try:
@@ -449,10 +449,13 @@ async def _post_topic_menu(
 ):
     text = "Меню действий"
     builder = _build_topic_menu(status)
-    await sender.send_ephemeral_text(
+    msg = await sender.send_message(  # FIXED #3
         chat_id=chat_id,
         message_thread_id=topic_id,
         text=text,
         reply_markup=builder.as_markup(),
-        ttl_sec=TTL_MENU_SEC,
     )
+    try:
+        await sender.pin_chat_message(chat_id, msg.message_id)  # FIXED #3
+    except Exception as exc:
+        logger.warning(f"Could not pin topic menu in topic {topic_id}: {exc}")  # FIXED #3

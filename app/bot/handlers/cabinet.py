@@ -3,6 +3,10 @@
 Доступен только CRM-администраторам.
 """
 from datetime import datetime, timedelta
+import io  # FIXED #13
+
+import openpyxl  # FIXED #13
+from openpyxl.styles import Font, PatternFill, Alignment  # FIXED #13
 
 from aiogram import Router, F
 from aiogram.filters import Command
@@ -157,7 +161,7 @@ async def cab_export_period(callback: CallbackQuery, sender: TelegramSafeSender)
         return
     await sender.answer(callback)
     stage = callback.data.split(":")[2]
-    await sender.edit_text(
+    await sender.edit_message_text(  # FIXED #5
         chat_id=callback.message.chat.id,
         message_id=callback.message.message_id,
         text="📅 <b>Выберите период</b>:",
@@ -201,10 +205,6 @@ async def cab_export_do(callback: CallbackQuery, sender: TelegramSafeSender):
             ttl_sec=TTL_MENU_SEC,
         )
         return
-
-    import io
-    import openpyxl
-    from openpyxl.styles import Font, PatternFill, Alignment
 
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -284,7 +284,7 @@ async def cab_analytics(callback: CallbackQuery, sender: TelegramSafeSender):
         InlineKeyboardButton(text="👥 Работа с заявками", callback_data="cab:analytics:activity"),
     )
     builder.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="cab:back"))
-    await sender.edit_text(
+    await sender.edit_message_text(  # FIXED #5
         chat_id=callback.message.chat.id,
         message_id=callback.message.message_id,
         text="📊 <b>Аналитика</b>\nВыберите режим:",
@@ -306,7 +306,7 @@ async def cab_analytics_conversion(callback: CallbackQuery, sender: TelegramSafe
         await sender.answer(callback, "⛔️ Нет доступа", show_alert=True)
         return
     await sender.answer(callback)
-    await sender.edit_text(
+    await sender.edit_message_text(  # FIXED #5
         chat_id=callback.message.chat.id,
         message_id=callback.message.message_id,
         text="📈 <b>Конверсия</b>\nВыберите период:",
@@ -369,7 +369,7 @@ async def cab_analytics_activity(callback: CallbackQuery, sender: TelegramSafeSe
         await sender.answer(callback, "⛔️ Нет доступа", show_alert=True)
         return
     await sender.answer(callback)
-    await sender.edit_text(
+    await sender.edit_message_text(  # FIXED #5
         chat_id=callback.message.chat.id,
         message_id=callback.message.message_id,
         text="👥 <b>Работа с заявками</b>\nВыберите период:",
@@ -487,7 +487,7 @@ async def cab_integrations(callback: CallbackQuery, sender: TelegramSafeSender):
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text="📋 Скопировать URL", callback_data="cab:copy_webhook"))
     builder.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="cab:back"))
-    await sender.edit_text(
+    await sender.edit_message_text(  # FIXED #5
         chat_id=callback.message.chat.id,
         message_id=callback.message.message_id,
         text=text,

@@ -1,3 +1,4 @@
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -14,6 +15,13 @@ class Settings(BaseSettings):
     database_url:    str
     api_secret_key:  str   # никогда не хардкодить! только через .env
     public_domain:  str = "YOUR_DOMAIN"  # example.com without scheme
+
+    @field_validator("public_domain")
+    @classmethod
+    def check_domain(cls, v: str) -> str:  # FIXED #10
+        if not v or v.strip().upper() == "YOUR_DOMAIN":
+            raise ValueError("Укажите реальный домен в .env (PUBLIC_DOMAIN=example.com)")
+        return v.replace("https://", "").replace("http://", "").strip("/")  # FIXED #10
 
     # ── Redis ──────────────────────────────────────────────────
     use_redis:  bool = False          # false = MemoryStorage (для dev)
