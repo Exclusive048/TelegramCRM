@@ -18,8 +18,7 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True, slots=True)
 class RateKey:
-    chat_id: int
-    thread_id: int | None
+    chat_id: int  # FIXED #6
 
 
 class ChatRateLimiter:
@@ -84,7 +83,7 @@ class TelegramSafeSender:
                 logger.warning(
                     "telegram_flood_hit chat_id={} thread_id={} method={} retry_after={} attempt={}",
                     key.chat_id,
-                    key.thread_id,
+                    getattr(key, "thread_id", None),  # FIXED #6
                     method,
                     retry_after,
                     attempt,
@@ -109,13 +108,13 @@ class TelegramSafeSender:
                         "telegram_parse_error method={} chat_id={} thread_id={} snippet={}",
                         method,
                         key.chat_id,
-                        key.thread_id,
+                        getattr(key, "thread_id", None),  # FIXED #6
                         snippet,
                     )
                 raise
 
     def _rate_key(self, chat_id: int, thread_id: int | None) -> RateKey:
-        return RateKey(chat_id=chat_id, thread_id=thread_id)
+        return RateKey(chat_id=chat_id)  # FIXED #6
 
     async def _call_chat(
         self,

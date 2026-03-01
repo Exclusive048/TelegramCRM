@@ -125,14 +125,15 @@ async def update_lead(
         raise HTTPException(status_code=404, detail="Lead not found")
     if body.status:
         service = LeadService(repo, sender)
+        manager_tg_id = body.manager_tg_id  # FIXED #7
         if body.status == LeadStatus.IN_PROGRESS:
-            await service.take_in_progress(lead_id, 0, None)
+            await service.take_in_progress(lead_id, manager_tg_id, None)  # FIXED #7
         elif body.status == LeadStatus.PAID:
-            await service.mark_paid(lead_id, 0, body.amount, None)
+            await service.mark_paid(lead_id, manager_tg_id, body.amount, None)  # FIXED #7
         elif body.status == LeadStatus.SUCCESS:
-            await service.mark_success(lead_id, 0, None)
+            await service.mark_success(lead_id, manager_tg_id, None)  # FIXED #7
         elif body.status == LeadStatus.REJECTED:
-            await service.reject_lead(lead_id, 0, body.reject_reason or "", None)
+            await service.reject_lead(lead_id, manager_tg_id, body.reject_reason or "", None)  # FIXED #7
     return OkResponse()
 
 

@@ -7,9 +7,8 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from loguru import logger
 
 from app.core.config import settings
-from app.db.database import create_tables
 from app.api.routes import leads as leads_router
-from app.bot.handlers import lead_callbacks, setup, cabinet, panel, input_flow
+from app.bot.handlers import lead_callbacks, setup, cabinet, panel  # FIXED #14
 from app.bot.middlewares.sender_middleware import SenderMiddleware
 from app.services.message_deletion_service import MessageDeletionService
 from app.services.reminder_service import ReminderService
@@ -36,8 +35,7 @@ async def start_bot(dp: Dispatcher, bot: Bot):
 
 async def main():
     logger.info("Start TelegramCRM bot")
-    await create_tables()
-    logger.info("Tables created or already exist")
+    logger.info("Starting TelegramCRM bot. Ensure 'python migrate.py dev' was run before first launch.")  # FIXED #4
 
     bot = Bot(token=settings.bot_token, default=DefaultBotProperties(parse_mode="HTML"))
 
@@ -74,8 +72,7 @@ async def main():
     dp.include_router(lead_callbacks.router)
     dp.include_router(setup.router)
     dp.include_router(cabinet.router)
-    dp.include_router(panel.router)
-    dp.include_router(input_flow.router)
+    dp.include_router(panel.router)  # FIXED #14
 
     await deletion_service.start(sender)
     await ReminderService.start_scheduler(sender)

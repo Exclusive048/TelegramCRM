@@ -1,4 +1,5 @@
 from aiogram import Router, F
+from aiogram.filters import Command
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -154,6 +155,39 @@ async def ensure_panel_message(sender: TelegramSafeSender, chat_id: int, topic_i
         return msg.message_id
 
 
+@router.message(Command("panel"))  # FIXED #11
+async def cmd_panel(message: Message, sender: TelegramSafeSender):
+    """Восстанавливает пульт управления командой в текущем топике."""  # FIXED #11
+    if not await _check_admin(sender, message.from_user.id):
+        await sender.send_ephemeral_text(
+            chat_id=message.chat.id,
+            message_thread_id=message.message_thread_id,
+            text="⛔️ Только CRM-администраторы могут использовать /panel.",
+            ttl_sec=30,
+        )
+        return
+
+    topic_id = message.message_thread_id
+    if not topic_id:
+        await sender.send_ephemeral_text(
+            chat_id=message.chat.id,
+            message_thread_id=None,
+            text="⚠️ Команда /panel работает только внутри топика Менеджеров.",
+            ttl_sec=30,
+        )
+        return
+
+    await ensure_panel_message(sender, message.chat.id, topic_id)  # FIXED #11
+    try:
+        await sender.delete_message(
+            chat_id=message.chat.id,
+            message_id=message.message_id,
+            thread_id=message.message_thread_id,
+        )
+    except Exception:
+        pass
+
+
 @router.callback_query(F.data.startswith("panel:") | F.data.startswith("team:"))
 async def handle_panel_actions(callback: CallbackQuery, state: FSMContext, sender: TelegramSafeSender):
     action = parse_panel_callback(callback.data)
@@ -172,17 +206,14 @@ async def handle_panel_actions(callback: CallbackQuery, state: FSMContext, sende
 
     async with AsyncSessionLocal() as session:
         repo = LeadRepository(session)
-        topic_id = callback.message.message_thread_id
+        topic_id = await resolve_topic_thread_id(
+            settings.crm_group_id,
+            TopicKey.MANAGERS,
+            session,
+            sender=None,
+        ) or callback.message.message_thread_id  # FIXED #1
         if not topic_id:
-            topic_id = await resolve_topic_thread_id(
-                chat_id,
-                TopicKey.MANAGERS,
-                session,
-                sender=sender,
-                thread_id=None,
-            )
-            if not topic_id:
-                return
+            return
 
         if action in {"panel_home", "panel_team", "team_cancel"}:
             await state.clear()

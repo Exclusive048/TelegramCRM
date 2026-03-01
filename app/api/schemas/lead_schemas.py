@@ -28,6 +28,7 @@ class TildaWebhookRequest(BaseModel):
 class LeadUpdateRequest(BaseModel):
     status:        LeadStatus | None = None
     manager_id:    int | None        = None
+    manager_tg_id: int | None        = None  # FIXED #7
     reject_reason: str | None        = None
     service:       str | None        = None
     email:         str | None        = None
