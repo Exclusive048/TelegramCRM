@@ -8,7 +8,8 @@ from loguru import logger
 
 from app.bot.constants.ttl import TTL_MENU_SEC
 from app.bot.topic_resolver import resolve_topic_thread_id
-from app.bot.topics import TopicKey
+from app.bot.topic_cache import invalidate as invalidate_topic_cache
+from app.bot.topics import TOPIC_SPECS, TopicKey
 from app.bot.ui.panel import (
     render_panel_home,
     render_panel_team,
@@ -22,9 +23,35 @@ from app.core.config import settings
 from app.core.permissions import is_crm_admin
 from app.db.database import AsyncSessionLocal
 from app.db.repositories.lead_repository import LeadRepository
+from app.db.repositories.tenant_topics import TenantTopicRepository
 from app.telegram.safe_sender import TelegramSafeSender
 
 router = Router()
+
+
+def _get_topic_spec(key: TopicKey):
+    for spec in TOPIC_SPECS:
+        if spec.key == key:
+            return spec
+    return None
+
+
+async def _probe_topic_thread(sender: TelegramSafeSender, chat_id: int, thread_id: int) -> bool:
+    await sender.get_chat(chat_id)
+    probe = await sender.send_text(
+        chat_id=chat_id,
+        message_thread_id=thread_id,
+        text=".",
+    )
+    try:
+        await sender.delete_message(
+            chat_id=chat_id,
+            message_id=probe.message_id,
+            thread_id=probe.message_thread_id,
+        )
+    except Exception as exc:
+        logger.warning(f"Could not delete probe message in thread {thread_id}: {exc}")
+    return True
 
 
 class PanelAddManagerState(StatesGroup):
@@ -108,9 +135,43 @@ async def _safe_edit_panel_message(
         return message_id
 
 
-async def ensure_panel_message(sender: TelegramSafeSender, chat_id: int, topic_id: int) -> int:
+async def ensure_panel_message(sender: TelegramSafeSender, chat_id: int, topic_id: int) -> int | None:
     async with AsyncSessionLocal() as session:
         repo = LeadRepository(session)
+        topic_repo = TenantTopicRepository(session)
+        try:
+            try:
+                await _probe_topic_thread(sender, chat_id, topic_id)
+            except TelegramBadRequest as e:
+                if "message thread not found" in str(e).lower():
+                    topic_id = None
+                else:
+                    raise
+        except Exception as exc:
+            logger.error(f"Failed to validate panel topic: {exc}")
+            return None
+
+        if not topic_id:
+            spec = _get_topic_spec(TopicKey.MANAGERS)
+            if not spec:
+                logger.error("Topic spec missing for MANAGERS")
+                return None
+            try:
+                topic = await sender.create_forum_topic(chat_id, spec.title)
+                topic_id = topic.message_thread_id
+                await topic_repo.upsert_topic(
+                    chat_id=chat_id,
+                    key=TopicKey.MANAGERS.value,
+                    thread_id=topic_id,
+                    title=spec.title,
+                )
+                await session.commit()
+                invalidate_topic_cache(chat_id)
+                logger.info(f"Managers topic recreated -> id={topic_id}")
+            except Exception as exc:
+                logger.error(f"Failed to recreate managers topic: {exc}")
+                return None
+
         existing_message_id = await repo.get_or_create_panel_message_id(chat_id, topic_id)
         text = render_panel_home()
         keyboard = build_kb_panel_home()

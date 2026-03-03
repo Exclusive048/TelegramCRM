@@ -43,4 +43,6 @@ class Settings(BaseSettings):
 
     tilda_secret: str = '' # Секрет для верификации запросов от Tilda, если не пустой
 
+    debug: bool = False  # для включения отладочного режима (например, отключить удаление сообщений)
+    
 settings = Settings()

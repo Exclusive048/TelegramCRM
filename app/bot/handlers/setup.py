@@ -1,4 +1,5 @@
 from aiogram import Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.types import ChatMemberOwner, InlineKeyboardButton, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -18,6 +19,31 @@ from app.db.repositories.tenant_topics import TenantTopicRepository
 from app.telegram.safe_sender import TelegramSafeSender
 
 router = Router()
+
+
+def _get_topic_spec(key: TopicKey):
+    for spec in TOPIC_SPECS:
+        if spec.key == key:
+            return spec
+    return None
+
+
+async def _probe_topic_thread(sender: TelegramSafeSender, chat_id: int, thread_id: int) -> bool:
+    await sender.get_chat(settings.crm_group_id)
+    probe = await sender.send_text(
+        chat_id=chat_id,
+        message_thread_id=thread_id,
+        text=".",
+    )
+    try:
+        await sender.delete_message(
+            chat_id=chat_id,
+            message_id=probe.message_id,
+            thread_id=probe.message_thread_id,
+        )
+    except Exception as exc:
+        logger.warning(f"Could not delete probe message in thread {thread_id}: {exc}")
+    return True
 
 
 async def _ensure_owner_registered(user_id: int, full_name: str, username: str | None):
@@ -89,6 +115,21 @@ async def cmd_setup(message: Message, sender: TelegramSafeSender):
         for spec in TOPIC_SPECS:
             existing_thread = existing_map.get(spec.key.value)
             if existing_thread:
+                try:
+                    try:
+                        await _probe_topic_thread(sender, chat_id, existing_thread)
+                    except TelegramBadRequest as e:
+                        if "message thread not found" in str(e).lower():
+                            existing_thread = None
+                            existing_map.pop(spec.key.value, None)
+                        else:
+                            raise
+                except Exception as exc:
+                    errors.append((spec.title, str(exc)))
+                    logger.error(f"Failed to validate topic '{spec.title}': {exc}")
+                    continue
+
+            if existing_thread:
                 await repo.upsert_topic(
                     chat_id=chat_id,
                     key=spec.key.value,
@@ -96,6 +137,7 @@ async def cmd_setup(message: Message, sender: TelegramSafeSender):
                     title=spec.title,
                 )
                 continue
+
             try:
                 topic = await sender.create_forum_topic(chat_id, spec.title)
                 await repo.upsert_topic(
@@ -406,16 +448,45 @@ async def cmd_managers(message: Message, sender: TelegramSafeSender):
 
 async def _ensure_topic_menus(sender: TelegramSafeSender, chat_id: int):
     async with AsyncSessionLocal() as session:
+        repo = TenantTopicRepository(session)
         for status, key in STATUS_TO_TOPIC_KEY.items():
-            topic_id = await resolve_topic_thread_id(
-                chat_id,
-                key,
-                session,
-                sender=sender,
-                thread_id=None,
-            )
-            if topic_id:
-                await _post_topic_menu(sender, chat_id, topic_id, status)
+            try:
+                topic_id = await resolve_topic_thread_id(
+                    chat_id,
+                    key,
+                    session,
+                    sender=sender,
+                    thread_id=None,
+                )
+                if topic_id:
+                    try:
+                        await _probe_topic_thread(sender, chat_id, topic_id)
+                    except TelegramBadRequest as e:
+                        if "message thread not found" in str(e).lower():
+                            topic_id = None
+                        else:
+                            raise
+
+                if not topic_id:
+                    spec = _get_topic_spec(key)
+                    if not spec:
+                        logger.error(f"Topic spec not found for {key}")
+                        continue
+                    topic = await sender.create_forum_topic(chat_id, spec.title)
+                    await repo.upsert_topic(
+                        chat_id=chat_id,
+                        key=key.value,
+                        thread_id=topic.message_thread_id,
+                        title=spec.title,
+                    )
+                    await session.commit()
+                    invalidate_topic_cache(chat_id)
+                    topic_id = topic.message_thread_id
+
+                if topic_id:
+                    await _post_topic_menu(sender, chat_id, topic_id, status)
+            except Exception as exc:
+                logger.error(f"Failed to ensure menu for {key.value}: {exc}")
 
 
 def _build_topic_menu(status: LeadStatus) -> InlineKeyboardBuilder:

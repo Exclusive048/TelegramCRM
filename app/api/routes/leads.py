@@ -1,5 +1,3 @@
-from curses import raw
-
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime
@@ -61,7 +59,7 @@ async def tilda_webhook(
         "service": data.get("Service") or data.get("service") or None,
         "utm_campaign": data.get("utm_campaign") or data.get("UTM_CAMPAIGN") or None,
         "utm_source":   data.get("utm_source") or None,
-        "extra": {k: str(v)[:500] for k, v in list(raw.items())[:MAX_EXTRA_KEYS] if k not in 
+        "extra": {k: str(v)[:500] for k, v in list(data.items())[:MAX_EXTRA_KEYS] if k not in 
                   {"Name", "Phone", "Comment", "Message", "Service", "utm_campaign", "utm_source", "formid", "formname", "tranid"}} or None,
     }
 
