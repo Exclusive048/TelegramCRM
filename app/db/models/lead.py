@@ -235,9 +235,9 @@ class Reminder(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     lead_id: Mapped[int] = mapped_column(ForeignKey("leads.id"))
     manager_tg_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    remind_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    remind_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     message: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_sent: Mapped[bool] = mapped_column(Boolean, default=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     lead: Mapped["Lead"] = relationship("Lead", back_populates="reminders")
