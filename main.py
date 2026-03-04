@@ -1,4 +1,5 @@
 import asyncio
+import sys
 import uvicorn
 from fastapi import FastAPI
 from aiogram import Bot, Dispatcher
@@ -8,19 +9,21 @@ from loguru import logger
 
 from app.core.config import settings
 from app.api.routes import leads as leads_router
+from app.api.routes import yukassa_webhook as yukassa_router
 from app.bot.handlers import lead_callbacks, setup, cabinet, panel  # FIXED #14
 from app.bot.middlewares.sender_middleware import SenderMiddleware
 from app.services.message_deletion_service import MessageDeletionService
 from app.services.reminder_service import ReminderService
+from app.services.subscription_scheduler import start_subscription_scheduler
 from app.telegram.safe_sender import TelegramSafeSender, ChatRateLimiter
 
 
 def create_app(bot: Bot, sender: TelegramSafeSender) -> FastAPI:
-    docs_url = '/api/docs' if settings.debug else None
-    app = FastAPI(docs_url=docs_url, redoc_url=None, title="TelegramCRM API", version="1.0")
+    app = FastAPI(docs_url="/api/docs", redoc_url=None, title="TelegramCRM API", version="1.0")
     app.state.bot = bot
     app.state.sender = sender
     app.include_router(leads_router.router, prefix="/api/v1")
+    app.include_router(yukassa_router.router, prefix="/api/v1")
 
     @app.get("/health")
     async def health():
@@ -32,6 +35,53 @@ def create_app(bot: Bot, sender: TelegramSafeSender) -> FastAPI:
 async def start_bot(dp: Dispatcher, bot: Bot):
     logger.info("Starting bot polling...")
     await dp.start_polling(bot, allowed_updates=["message", "callback_query"])
+
+
+async def start_bot_with_retry(dp: Dispatcher, bot: Bot):
+    """Запускает polling с автоматическим перезапуском при сетевых ошибках."""
+    from aiohttp import ClientError
+    from aiogram.exceptions import TelegramNetworkError
+
+    backoff = 1
+    while True:
+        try:
+            logger.info("Bot polling started")
+            backoff = 1
+            await dp.start_polling(
+                bot,
+                allowed_updates=["message", "callback_query"],
+                handle_signals=False,
+            )
+        except (TelegramNetworkError, ClientError, asyncio.TimeoutError) as e:
+            logger.warning(f"Bot polling network error: {e}. Retry in {backoff}s...")
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 60)
+        except Exception as e:
+            logger.error(f"Bot polling fatal error: {e}. Retry in {backoff}s...")
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 60)
+
+
+async def start_api_server(app: FastAPI):
+    """Запускает FastAPI/uvicorn сервер."""
+    config = uvicorn.Config(
+        app,
+        host=settings.api_host,
+        port=settings.api_port,
+        log_level="info",
+        timeout_keep_alive=30,
+    )
+    server = uvicorn.Server(config)
+    try:
+        await server.serve()
+    except Exception as e:
+        logger.error(f"API server error: {e}")
+        raise
+
+
+def handle_exception(loop, context):
+    msg = context.get("exception", context["message"])
+    logger.error(f"Unhandled asyncio exception: {msg}")
 
 
 async def main():
@@ -70,6 +120,8 @@ async def main():
     dp = Dispatcher(storage=storage)
     dp["sender"] = sender
     dp.update.middleware(SenderMiddleware())
+    from app.bot.middlewares.tenant_middleware import TenantMiddleware
+    dp.update.outer_middleware(TenantMiddleware())
     dp.include_router(lead_callbacks.router)
     dp.include_router(setup.router)
     dp.include_router(cabinet.router)
@@ -77,12 +129,39 @@ async def main():
 
     await deletion_service.start(sender)
     await ReminderService.start_scheduler(sender)
+    start_subscription_scheduler()
 
     app = create_app(bot, sender)
-    config = uvicorn.Config(app, host=settings.api_host, port=settings.api_port, log_level="info")
-    server = uvicorn.Server(config)
 
-    await asyncio.gather(start_bot(dp, bot), server.serve())
+    loop = asyncio.get_event_loop()
+    loop.set_exception_handler(handle_exception)
+
+    master_tasks = []
+    if settings.master_bot_token:
+        from aiogram.fsm.storage.memory import MemoryStorage as MasterMemory
+        from master_bot.handlers import router as master_router
+        from master_bot.notify import set_master_bot
+
+        master_bot_instance = Bot(
+            token=settings.master_bot_token,
+            default=DefaultBotProperties(parse_mode="HTML"),
+        )
+        set_master_bot(master_bot_instance)
+        master_dp = Dispatcher(storage=MasterMemory())
+        master_dp.include_router(master_router)
+        master_tasks.append(
+            asyncio.create_task(
+                start_bot_with_retry(master_dp, master_bot_instance)
+            )
+        )
+        logger.info("Master bot started")
+
+    await asyncio.gather(
+        start_bot_with_retry(dp, bot),
+        start_api_server(app),
+        *master_tasks,
+        return_exceptions=False,
+    )
 
 
 if __name__ == "__main__":

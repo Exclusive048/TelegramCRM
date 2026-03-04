@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import email
 
 from aiogram import Router, F
@@ -20,7 +20,6 @@ from app.bot.utils.force_reply import (
 from app.bot.keyboards.lead_keyboards import make_reject_reason_keyboard, make_reminder_keyboard
 from app.bot.utils.menu_cleanup import cleanup_inline_menu, cleanup_inline_menu_by_id
 from app.bot.ui.message_ref import MessageRef
-from app.core.config import settings
 from app.db.database import AsyncSessionLocal
 from app.db.models.lead import LeadStatus
 from app.db.repositories.lead_repository import LeadRepository
@@ -67,6 +66,10 @@ REJECT_REASON_LABELS = {
 NO_ACCESS_TEXT = "\u26d4\ufe0f \u0423 \u0432\u0430\u0441 \u043d\u0435\u0442 \u0434\u043e\u0441\u0442\u0443\u043f\u0430 \u043a \u044d\u0442\u043e\u043c\u0443 \u0434\u0435\u0439\u0441\u0442\u0432\u0438\u044e."
 
 
+def _get_group_id(tenant) -> int | None:
+    return tenant.group_id if tenant else None
+
+
 def _parse_amount(value: str) -> float | None:
     normalized = value.strip().replace(" ", "").replace(",", ".")
     try:
@@ -84,8 +87,8 @@ def _parse_custom_datetime(value: str) -> datetime | None:
         try:
             parsed = datetime.strptime(value, fmt)
             if fmt == "%d.%m %H:%M":
-                parsed = parsed.replace(year=datetime.now().year)
-            return parsed
+                parsed = parsed.replace(year=datetime.now(timezone.utc).year)
+            return parsed.replace(tzinfo=timezone.utc)
         except ValueError:
             continue
     return None
@@ -104,7 +107,12 @@ def _manager_can_act(manager, lead) -> bool:
 
 
 @router.callback_query(F.data.startswith("lead:"))
-async def handle_lead_action(callback: CallbackQuery, state: FSMContext, sender: TelegramSafeSender):
+async def handle_lead_action(
+    callback: CallbackQuery,
+    state: FSMContext,
+    sender: TelegramSafeSender,
+    tenant=None,
+):
     parts = callback.data.split(":")
     if len(parts) < 3:
         await sender.answer(callback)
@@ -117,6 +125,9 @@ async def handle_lead_action(callback: CallbackQuery, state: FSMContext, sender:
         return
     lead_id = int(lead_id_raw)
     source_ref = MessageRef.from_callback(callback)
+    group_id = _get_group_id(tenant)
+    if not group_id and callback.message:
+        group_id = callback.message.chat.id
 
     async with AsyncSessionLocal() as session:
         repo = LeadRepository(session)
@@ -125,7 +136,7 @@ async def handle_lead_action(callback: CallbackQuery, state: FSMContext, sender:
             await sender.answer(callback, NO_ACCESS_TEXT, show_alert=True)
             return
 
-        service = LeadService(repo, sender)
+        service = LeadService(repo, sender, group_id=group_id)
 
         if action == "take":
             lead = await service.take_in_progress(lead_id, callback.from_user.id, source_ref)
@@ -292,7 +303,7 @@ async def handle_lead_action(callback: CallbackQuery, state: FSMContext, sender:
                 await start_force_reply(callback, state, sender, "Введите дату и время (ДД.ММ.ГГГГ ЧЧ:ММ):")
                 return
 
-            now = datetime.now()
+            now = datetime.now(timezone.utc)
             if choice == "1h":
                 remind_at = now + timedelta(hours=1)
             elif choice == "3h":
@@ -307,6 +318,7 @@ async def handle_lead_action(callback: CallbackQuery, state: FSMContext, sender:
                 lead_id=lead_id,
                 manager_tg_id=callback.from_user.id,
                 remind_at=remind_at,
+                group_id=group_id,
             )
             await session.commit()
             if reminder:
@@ -320,8 +332,14 @@ async def handle_lead_action(callback: CallbackQuery, state: FSMContext, sender:
 
 
 @router.message(AmountState.waiting_for_amount)
-async def handle_amount_input(message: Message, state: FSMContext, sender: TelegramSafeSender):
-    if message.chat.id != settings.crm_group_id:
+async def handle_amount_input(
+    message: Message,
+    state: FSMContext,
+    sender: TelegramSafeSender,
+    tenant=None,
+):
+    group_id = _get_group_id(tenant)
+    if not group_id or message.chat.id != group_id:
         await state.clear()
         return
     if not await reject_non_force_reply(message, state, sender):
@@ -372,7 +390,7 @@ async def handle_amount_input(message: Message, state: FSMContext, sender: Teleg
             await state.clear()
             return
 
-        service = LeadService(repo, sender)
+        service = LeadService(repo, sender, group_id=group_id)
         lead = await service.mark_paid(int(lead_id), message.from_user.id, amount, target_ref)
         if lead:
             await session.commit()
@@ -389,8 +407,14 @@ async def handle_amount_input(message: Message, state: FSMContext, sender: Teleg
 
 
 @router.message(RejectState.waiting_for_custom_reason)
-async def handle_custom_reject(message: Message, state: FSMContext, sender: TelegramSafeSender):
-    if message.chat.id != settings.crm_group_id:
+async def handle_custom_reject(
+    message: Message,
+    state: FSMContext,
+    sender: TelegramSafeSender,
+    tenant=None,
+):
+    group_id = _get_group_id(tenant)
+    if not group_id or message.chat.id != group_id:
         await state.clear()
         return
     if not await reject_non_force_reply(message, state, sender):
@@ -441,7 +465,7 @@ async def handle_custom_reject(message: Message, state: FSMContext, sender: Tele
             await state.clear()
             return
 
-        service = LeadService(repo, sender)
+        service = LeadService(repo, sender, group_id=group_id)
         lead = await service.reject_lead(int(lead_id), message.from_user.id, reason=reason, source_ref=target_ref)
         if lead:
             await session.commit()
@@ -458,8 +482,14 @@ async def handle_custom_reject(message: Message, state: FSMContext, sender: Tele
 
 
 @router.message(NoteState.waiting_for_text)
-async def handle_note_text(message: Message, state: FSMContext, sender: TelegramSafeSender):
-    if message.chat.id != settings.crm_group_id:
+async def handle_note_text(
+    message: Message,
+    state: FSMContext,
+    sender: TelegramSafeSender,
+    tenant=None,
+):
+    group_id = _get_group_id(tenant)
+    if not group_id or message.chat.id != group_id:
         await state.clear()
         return
     if not await reject_non_force_reply(message, state, sender):
@@ -510,7 +540,7 @@ async def handle_note_text(message: Message, state: FSMContext, sender: Telegram
             await state.clear()
             return
 
-        service = LeadService(repo, sender)
+        service = LeadService(repo, sender, group_id=group_id)
         await service.add_comment(
             lead_id=int(lead_id),
             text=text,
@@ -524,8 +554,14 @@ async def handle_note_text(message: Message, state: FSMContext, sender: Telegram
 
 
 @router.message(ReminderState.waiting_for_custom_time)
-async def handle_custom_reminder_time(message: Message, state: FSMContext, sender: TelegramSafeSender):
-    if message.chat.id != settings.crm_group_id:
+async def handle_custom_reminder_time(
+    message: Message,
+    state: FSMContext,
+    sender: TelegramSafeSender,
+    tenant=None,
+):
+    group_id = _get_group_id(tenant)
+    if not group_id or message.chat.id != group_id:
         await state.clear()
         return
     if not await reject_non_force_reply(message, state, sender):
@@ -582,6 +618,7 @@ async def handle_custom_reminder_time(message: Message, state: FSMContext, sende
             lead_id=int(lead_id),
             manager_tg_id=message.from_user.id,
             remind_at=remind_at,
+            group_id=group_id,
         )
         await session.commit()
         if reminder:
@@ -604,8 +641,9 @@ async def handle_custom_reminder_time(message: Message, state: FSMContext, sende
 
 
 @router.message(F.reply_to_message)
-async def handle_reply_note(message: Message, sender: TelegramSafeSender):
-    if message.chat.id != settings.crm_group_id:
+async def handle_reply_note(message: Message, sender: TelegramSafeSender, tenant=None):
+    group_id = _get_group_id(tenant)
+    if not group_id or message.chat.id != group_id:
         return
     if not message.text or message.text.startswith("/"):
         return
@@ -662,7 +700,7 @@ async def handle_reply_note(message: Message, sender: TelegramSafeSender):
             )
             return
 
-        service = LeadService(repo, sender)
+        service = LeadService(repo, sender, group_id=group_id)
         await service.add_comment(
             lead_id=lead_id,
             text=message.text.strip(),
@@ -699,8 +737,14 @@ async def handle_create_lead(callback: CallbackQuery, state: FSMContext, sender:
 
 
 @router.message(CreateLeadState.waiting_for_name)
-async def handle_create_lead_name(message: Message, state: FSMContext, sender: TelegramSafeSender):
-    if message.chat.id != settings.crm_group_id:
+async def handle_create_lead_name(
+    message: Message,
+    state: FSMContext,
+    sender: TelegramSafeSender,
+    tenant=None,
+):
+    group_id = _get_group_id(tenant)
+    if not group_id or message.chat.id != group_id:
         await state.clear()
         return
     if not await reject_non_force_reply(message, state, sender):
@@ -729,8 +773,14 @@ async def handle_create_lead_name(message: Message, state: FSMContext, sender: T
 
 
 @router.message(CreateLeadState.waiting_for_phone)
-async def handle_create_lead_phone(message: Message, state: FSMContext, sender: TelegramSafeSender):
-    if message.chat.id != settings.crm_group_id:
+async def handle_create_lead_phone(
+    message: Message,
+    state: FSMContext,
+    sender: TelegramSafeSender,
+    tenant=None,
+):
+    group_id = _get_group_id(tenant)
+    if not group_id or message.chat.id != group_id:
         await state.clear()
         return
     if not await reject_non_force_reply(message, state, sender):
@@ -772,8 +822,14 @@ async def handle_skip_email(callback: CallbackQuery, state: FSMContext, sender: 
 
 
 @router.message(CreateLeadState.waiting_for_email)
-async def handle_create_lead_email(message: Message, state: FSMContext, sender: TelegramSafeSender):
-    if message.chat.id != settings.crm_group_id:
+async def handle_create_lead_email(
+    message: Message,
+    state: FSMContext,
+    sender: TelegramSafeSender,
+    tenant=None,
+):
+    group_id = _get_group_id(tenant)
+    if not group_id or message.chat.id != group_id:
         await state.clear()
         return
     if not await reject_non_force_reply(message, state, sender):
@@ -801,8 +857,14 @@ async def handle_skip_service(callback: CallbackQuery, state: FSMContext, sender
 
 
 @router.message(CreateLeadState.waiting_for_service)
-async def handle_create_lead_service(message: Message, state: FSMContext, sender: TelegramSafeSender):
-    if message.chat.id != settings.crm_group_id:
+async def handle_create_lead_service(
+    message: Message,
+    state: FSMContext,
+    sender: TelegramSafeSender,
+    tenant=None,
+):
+    group_id = _get_group_id(tenant)
+    if not group_id or message.chat.id != group_id:
         await state.clear()
         return
     if not await reject_non_force_reply(message, state, sender):
@@ -818,8 +880,14 @@ async def handle_create_lead_service(message: Message, state: FSMContext, sender
 
 
 @router.message(CreateLeadState.waiting_for_comment)
-async def handle_create_lead_comment(message: Message, state: FSMContext, sender: TelegramSafeSender):
-    if message.chat.id != settings.crm_group_id:
+async def handle_create_lead_comment(
+    message: Message,
+    state: FSMContext,
+    sender: TelegramSafeSender,
+    tenant=None,
+):
+    group_id = _get_group_id(tenant)
+    if not group_id or message.chat.id != group_id:
         await state.clear()
         return
     if not await reject_non_force_reply(message, state, sender):
@@ -861,7 +929,7 @@ async def handle_create_lead_comment(message: Message, state: FSMContext, sender
             await state.clear()
             return
 
-        service = LeadService(repo, sender)
+        service = LeadService(repo, sender, group_id=group_id)
         lead = await service.create_lead(payload)
         await session.commit()
 
@@ -912,7 +980,7 @@ async def handle_menu_period(callback: CallbackQuery, sender: TelegramSafeSender
             return
 
         period = parts[3]
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         date_from = {
             "today": now.replace(hour=0, minute=0, second=0, microsecond=0),
             "week": now - timedelta(days=7),

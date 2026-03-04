@@ -13,6 +13,7 @@ from app.db.models.lead import (
     LeadCardMessage,
     Reminder,
 )
+from app.db.models.tenant import Tenant
 
 
 class LeadRepository:
@@ -433,7 +434,7 @@ class LeadRepository:
     async def get_pending_reminders(self) -> list[Reminder]:
         result = await self.session.execute(
             select(Reminder)
-            .where(Reminder.is_sent == False)
+            .where(Reminder.is_sent == False, Reminder.remind_at > datetime.now(timezone.utc))
             .order_by(Reminder.remind_at.asc())
         )
         return result.scalars().all()
@@ -443,6 +444,14 @@ class LeadRepository:
             select(Reminder)
             .options(selectinload(Reminder.lead))
             .where(Reminder.id == reminder_id)
+        )
+        return result.scalar_one_or_none()
+
+    async def get_group_id_for_lead(self, lead_id: int) -> int | None:
+        result = await self.session.execute(
+            select(Tenant.group_id)
+            .join(Lead, Lead.tenant_id == Tenant.id)
+            .where(Lead.id == lead_id)
         )
         return result.scalar_one_or_none()
 
@@ -476,11 +485,31 @@ class LeadRepository:
         result = await self.session.execute(query)
         return result.scalars().all()
 
-    async def create_manager(self, tg_id: int, name: str, username: str | None, role: ManagerRole = ManagerRole.MANAGER) -> Manager:
+    async def count_active_managers(self, tenant_id: int | None = None) -> int:
+        q = select(func.count(Manager.id)).where(Manager.is_active == True)
+        if tenant_id is not None:
+            q = q.where(Manager.tenant_id == tenant_id)
+        result = await self.session.execute(q)
+        return result.scalar_one()
+
+    async def create_manager(
+        self,
+        tg_id: int,
+        name: str,
+        username: str | None,
+        role: ManagerRole = ManagerRole.MANAGER,
+        tenant_id: int | None = None,
+    ) -> Manager:
         if isinstance(role, str):
             role_norm = role.strip().lower()
             role = ManagerRole(role_norm)
-        manager = Manager(tg_id=tg_id, name=name, tg_username=username, role=role)
+        manager = Manager(
+            tg_id=tg_id,
+            name=name,
+            tg_username=username,
+            role=role,
+            tenant_id=tenant_id,
+        )
         self.session.add(manager)
         await self.session.flush()
         return manager
@@ -491,6 +520,7 @@ class LeadRepository:
         name: str,
         username: str | None,
         role: ManagerRole = ManagerRole.MANAGER,
+        tenant_id: int | None = None,
     ) -> Manager:
         existing = await self.get_manager_by_tg_id_any(tg_id)
         if existing:
@@ -498,6 +528,8 @@ class LeadRepository:
             if username:
                 existing.tg_username = username
             existing.is_active = True
+            if tenant_id is not None:
+                existing.tenant_id = tenant_id
             # Preserve admin role if already set
             if existing.role != ManagerRole.ADMIN:
                 existing.role = role
@@ -509,6 +541,7 @@ class LeadRepository:
             name=name,
             username=username,
             role=role,
+            tenant_id=tenant_id,
         )
 
     async def set_manager_role(self, tg_id: int, role: ManagerRole) -> Manager | None:

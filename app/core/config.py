@@ -9,40 +9,33 @@ class Settings(BaseSettings):
         case_sensitive=False,
     )
 
-    # ── ОБЯЗАТЕЛЬНЫЕ (нет дефолта — без них не запустится) ────
-    bot_token:       str
-    crm_group_id:    int
-    database_url:    str
-    api_secret_key:  str   # никогда не хардкодить! только через .env
-    public_domain:  str = "YOUR_DOMAIN"  # example.com without scheme
+    bot_token: str
+    master_bot_token: str = ""
+    crm_bot_username: str = "crm_bot"
+    master_admin_tg_id: int = 0
+    database_url: str
+    use_redis: bool = False
+    redis_url: str = "redis://localhost:6379/3"
+    api_host: str = "0.0.0.0"
+    api_port: int = 8000
+    public_domain: str
+    acme_email: str = ""
+    sla_new_hours: int = 2
+    sla_in_progress_days: int = 3
+    subscription_price: int = 990
+    subscription_days: int = 30
+    trial_days: int = 14
+    referral_bonus_days: int = 14
+    support_username: str = "@support"
+    yukassa_shop_id: str = ""
+    yukassa_secret_key: str = ""
 
     @field_validator("public_domain")
     @classmethod
-    def check_domain(cls, v: str) -> str:  # FIXED #10
+    def check_domain(cls, v: str) -> str:
         if not v or v.strip().upper() == "YOUR_DOMAIN":
             raise ValueError("Укажите реальный домен в .env (PUBLIC_DOMAIN=example.com)")
-        return v.replace("https://", "").replace("http://", "").strip("/")  # FIXED #10
+        return v.replace("https://", "").replace("http://", "").strip("/")
 
-    # ── Redis ──────────────────────────────────────────────────
-    use_redis:  bool = False          # false = MemoryStorage (для dev)
-    redis_url:  str  = "redis://localhost:6379/3"
 
-    # ── API сервер ─────────────────────────────────────────────
-    api_host:   str = "0.0.0.0"
-    api_port:   int = 8000
-
-    # ── SLA ────────────────────────────────────────────────────
-    sla_new_hours:         int = 2
-    sla_in_progress_days:  int = 3
-
-    # ── Email ──────────────────────────────────────────────────
-    default_export_email: str = ""
-
-    # ── Google Sheets ──────────────────────────────────────────
-    google_service_account_file: str = "scripts/google_service_account.json"
-
-    tilda_secret: str = '' # Секрет для верификации запросов от Tilda, если не пустой
-
-    debug: bool = False  # для включения отладочного режима (например, отключить удаление сообщений)
-    
 settings = Settings()
