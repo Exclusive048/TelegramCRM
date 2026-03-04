@@ -8,7 +8,6 @@ from loguru import logger
 
 from app.bot.topic_resolver import resolve_topic_thread_id
 from app.bot.topics import TopicKey
-from app.core.config import settings
 from app.db.database import AsyncSessionLocal
 from app.db.repositories.lead_repository import LeadRepository
 from app.db.models.lead import LeadStatus
@@ -46,7 +45,7 @@ def _build_message_link(chat_id: int, message_id: int) -> str:
     return f"https://t.me/c/{chat_part}/{message_id}"
 
 
-async def _send_reminder_job(reminder_id: int, sender: TelegramSafeSender):
+async def _send_reminder_job(reminder_id: int, sender: TelegramSafeSender, group_id: int | None):
     async with AsyncSessionLocal() as session:
         repo = LeadRepository(session)
         reminder = await repo.get_reminder_by_id(reminder_id)
@@ -54,6 +53,10 @@ async def _send_reminder_job(reminder_id: int, sender: TelegramSafeSender):
             return
         lead = reminder.lead
         if not lead:
+            return
+        if group_id is None:
+            group_id = await repo.get_group_id_for_lead(lead.id)
+        if not group_id:
             return
 
         active = await repo.get_active_card_message(lead.id)
@@ -73,7 +76,7 @@ async def _send_reminder_job(reminder_id: int, sender: TelegramSafeSender):
             lines.append(f"Ссылка: {link}")
 
         topic_id = await resolve_topic_thread_id(
-            settings.crm_group_id,
+            group_id,
             TopicKey.REMINDERS,
             session,
             sender=sender,
@@ -83,7 +86,7 @@ async def _send_reminder_job(reminder_id: int, sender: TelegramSafeSender):
             return
 
         await sender.send_message(  # FIXED #2
-            chat_id=settings.crm_group_id,
+            chat_id=group_id,
             message_thread_id=topic_id,
             text="\n".join(lines),
             parse_mode="HTML",
@@ -109,7 +112,8 @@ class ReminderService:
             now = datetime.now(timezone.utc)
             reminders = await repo.get_pending_reminders()
             for reminder in reminders:
-                _schedule_job(reminder.id, reminder.remind_at, sender, now=now)
+                group_id = await repo.get_group_id_for_lead(reminder.lead_id)
+                _schedule_job(reminder.id, reminder.remind_at, sender, group_id=group_id, now=now)
             logger.info(f"reminder_scheduler_loaded count={len(reminders)}")
 
     async def schedule_reminder(
@@ -117,6 +121,7 @@ class ReminderService:
         lead_id: int,
         manager_tg_id: int,
         remind_at: datetime,
+        group_id: int | None,
         message: str | None = None,
     ):
         reminder = await self.repo.create_reminder(
@@ -125,22 +130,35 @@ class ReminderService:
             remind_at=remind_at,
             message=message,
         )
-        _schedule_job(reminder.id, remind_at, self.sender)
+        _schedule_job(reminder.id, remind_at, self.sender, group_id=group_id)
         logger.info(
             f"reminder_created id={reminder.id} lead_id={lead_id} remind_at={remind_at.isoformat()}"
         )
         return reminder
 
 
-def _schedule_job(reminder_id: int, remind_at: datetime, sender: TelegramSafeSender, *, now: datetime | None = None):
-    now = now or datetime.now(timezone.utc)
+def _schedule_job(
+    reminder_id: int,
+    remind_at: datetime,
+    sender: TelegramSafeSender,
+    *,
+    group_id: int | None,
+    now: datetime | None = None,
+):
+    def _ensure_aware(dt: datetime) -> datetime:
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=timezone.utc)
+        return dt
+
+    remind_at = _ensure_aware(remind_at)
+    now = _ensure_aware(now or datetime.now(timezone.utc))
     run_at = remind_at if remind_at > now else now + timedelta(seconds=1)
     job_id = f"reminder:{reminder_id}"
     trigger = DateTrigger(run_date=run_at)
     _scheduler.add_job(
         _send_reminder_job,
         trigger=trigger,
-        args=[reminder_id, sender],
+        args=[reminder_id, sender, group_id],
         id=job_id,
         replace_existing=True,
     )

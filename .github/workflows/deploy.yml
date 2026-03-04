@@ -1,0 +1,164 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:   # ручной запуск из GitHub UI если нужно
+
+jobs:
+
+  # ── 1. Тесты и линтинг ─────────────────────────────────────────────────────
+  test:
+    name: Lint & Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Ruff lint
+        run: ruff check . --output-format=github
+
+      - name: Run tests
+        run: pytest tests/ -x -q --tb=short
+        continue-on-error: true   # не блокировать деплой пока тестов мало
+        # Убрать continue-on-error когда покроете тестами
+
+  # ── 2. Сборка и пуш Docker-образа ──────────────────────────────────────────
+  build:
+    name: Build & Push Docker Image
+    runs-on: ubuntu-latest
+    needs: test
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tags }}
+      short_sha: ${{ steps.sha.outputs.short }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get short SHA
+        id: sha
+        run: echo "short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=sha,prefix=sha-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ── 3. Деплой на VPS ───────────────────────────────────────────────────────
+  deploy:
+    name: Deploy to VPS
+    runs-on: ubuntu-latest
+    needs: build
+    environment: production   # требует ручного подтверждения в GitHub если настроено
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          script: |
+            set -e
+
+            echo "=== Deploy started: $(date) ==="
+            cd /opt/telegramcrm
+
+            # Скачать свежий код
+            git pull origin main
+
+            # Залогиниться в GHCR
+            echo "${{ secrets.GITHUB_TOKEN }}" | \
+              docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+            # Обновить образ
+            export DOCKER_IMAGE=ghcr.io/${{ github.repository }}:latest
+            docker compose pull app
+
+            # Применить миграции БД перед рестартом
+            docker compose run --rm app python migrate.py dev
+
+            # Перезапустить только app (postgres и redis не трогать)
+            docker compose up -d --no-deps app
+
+            # Подождать пока app станет healthy
+            echo "=== Waiting for healthcheck ==="
+            for i in $(seq 1 12); do
+              STATUS=$(docker compose ps app --format json | python3 -c \
+                "import sys,json; d=json.load(sys.stdin); print(d.get('Health','unknown'))" \
+                2>/dev/null || echo "starting")
+              echo "  attempt $i: $STATUS"
+              if [ "$STATUS" = "healthy" ]; then
+                echo "=== App is healthy! ==="
+                break
+              fi
+              sleep 5
+            done
+
+            # Проверить что всё живо
+            docker compose ps
+
+            # Очистить старые образы
+            docker image prune -f
+
+            echo "=== Deploy finished: $(date) ==="
+
+      - name: Notify on success
+        if: success()
+        uses: appleboy/telegram-action@master
+        with:
+          to: ${{ secrets.TELEGRAM_NOTIFY_CHAT_ID }}
+          token: ${{ secrets.TELEGRAM_NOTIFY_BOT_TOKEN }}
+          message: |
+            ✅ Deploy успешен
+            Ветка: main
+            Коммит: ${{ github.event.head_commit.message }}
+            SHA: ${{ needs.build.outputs.short_sha }}
+
+      - name: Notify on failure
+        if: failure()
+        uses: appleboy/telegram-action@master
+        with:
+          to: ${{ secrets.TELEGRAM_NOTIFY_CHAT_ID }}
+          token: ${{ secrets.TELEGRAM_NOTIFY_BOT_TOKEN }}
+          message: |
+            ❌ Deploy УПАЛ
+            Ветка: main
+            SHA: ${{ needs.build.outputs.short_sha }}
+            Смотри: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

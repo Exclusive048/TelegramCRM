@@ -19,7 +19,6 @@ from app.bot.ui.panel import (
     build_kb_panel_team_add_prompt,
     parse_panel_callback,
 )
-from app.core.config import settings
 from app.core.permissions import is_crm_admin
 from app.db.database import AsyncSessionLocal
 from app.db.repositories.lead_repository import LeadRepository
@@ -27,6 +26,10 @@ from app.db.repositories.tenant_topics import TenantTopicRepository
 from app.telegram.safe_sender import TelegramSafeSender
 
 router = Router()
+
+
+def _get_group_id(tenant) -> int | None:
+    return tenant.group_id if tenant else None
 
 
 def _get_topic_spec(key: TopicKey):
@@ -58,10 +61,10 @@ class PanelAddManagerState(StatesGroup):
     waiting_for_contact = State()
 
 
-async def _check_admin(sender: TelegramSafeSender, user_id: int) -> bool:
+async def _check_admin(sender: TelegramSafeSender, user_id: int, group_id: int) -> bool:
     async with AsyncSessionLocal() as session:
         repo = LeadRepository(session)
-        return await is_crm_admin(sender, repo, settings.crm_group_id, user_id)
+        return await is_crm_admin(sender, repo, group_id, user_id)
 
 
 async def _pin_panel_message(sender: TelegramSafeSender, chat_id: int, topic_id: int, message_id: int):
@@ -106,12 +109,6 @@ async def _safe_edit_panel_message(
                 )
             except TelegramBadRequest as edit_err:
                 logger.warning(f"Panel reply markup edit failed: {edit_err}")
-            await sender.schedule_delete(
-                chat_id=chat_id,
-                message_id=message_id,
-                thread_id=topic_id,
-                ttl_sec=TTL_MENU_SEC,
-            )
             return message_id
         if any(token in msg for token in ("message to edit not found", "message_id_invalid", "message can't be edited")):
             new_msg = await sender.send_message(
@@ -122,12 +119,6 @@ async def _safe_edit_panel_message(
                 parse_mode="HTML",
             )
             await repo.set_panel_message_id(chat_id, topic_id, new_msg.message_id)
-            await sender.schedule_delete(
-                chat_id=chat_id,
-                message_id=new_msg.message_id,
-                thread_id=topic_id,
-                ttl_sec=TTL_MENU_SEC,
-            )
             await _pin_panel_message(sender, chat_id, topic_id, new_msg.message_id)
             logger.warning(f"Panel message restored with new message_id={new_msg.message_id}")
             return new_msg.message_id
@@ -205,9 +196,12 @@ async def ensure_panel_message(sender: TelegramSafeSender, chat_id: int, topic_i
 
 
 @router.message(Command("panel"))  # FIXED #11
-async def cmd_panel(message: Message, sender: TelegramSafeSender):
+async def cmd_panel(message: Message, sender: TelegramSafeSender, tenant=None):
     """Восстанавливает пульт управления командой в текущем топике."""  # FIXED #11
-    if not await _check_admin(sender, message.from_user.id):
+    group_id = _get_group_id(tenant)
+    if not group_id:
+        return
+    if not await _check_admin(sender, message.from_user.id, group_id):
         await sender.send_ephemeral_text(
             chat_id=message.chat.id,
             message_thread_id=message.message_thread_id,
@@ -238,13 +232,17 @@ async def cmd_panel(message: Message, sender: TelegramSafeSender):
 
 
 @router.callback_query(F.data.startswith("panel:") | F.data.startswith("team:"))
-async def handle_panel_actions(callback: CallbackQuery, state: FSMContext, sender: TelegramSafeSender):
+async def handle_panel_actions(callback: CallbackQuery, state: FSMContext, sender: TelegramSafeSender, tenant=None):
     action = parse_panel_callback(callback.data)
     if not action:
         await sender.answer(callback)
         return
 
-    if not await _check_admin(sender, callback.from_user.id):
+    group_id = _get_group_id(tenant)
+    if not group_id:
+        await sender.answer(callback)
+        return
+    if not await _check_admin(sender, callback.from_user.id, group_id):
         await sender.answer(callback, "⛔ Нет доступа.", show_alert=True)
         return
 
@@ -256,7 +254,7 @@ async def handle_panel_actions(callback: CallbackQuery, state: FSMContext, sende
     async with AsyncSessionLocal() as session:
         repo = LeadRepository(session)
         topic_id = await resolve_topic_thread_id(
-            settings.crm_group_id,
+            group_id,
             TopicKey.MANAGERS,
             session,
             sender=None,
@@ -308,12 +306,15 @@ async def handle_panel_actions(callback: CallbackQuery, state: FSMContext, sende
 
 
 @router.message(PanelAddManagerState.waiting_for_contact)
-async def handle_manager_contact(message: Message, state: FSMContext, sender: TelegramSafeSender):
-    if not await _check_admin(sender, message.from_user.id):
+async def handle_manager_contact(message: Message, state: FSMContext, sender: TelegramSafeSender, tenant=None):
+    group_id = _get_group_id(tenant)
+    if not group_id:
+        return
+    if not await _check_admin(sender, message.from_user.id, group_id):
         return
 
     data = await state.get_data()
-    panel_chat_id = data.get("panel_chat_id", settings.crm_group_id)
+    panel_chat_id = data.get("panel_chat_id", group_id)
     panel_topic_id = data.get("panel_topic_id")
     panel_message_id = data.get("panel_message_id")
 
@@ -372,6 +373,7 @@ async def handle_manager_contact(message: Message, state: FSMContext, sender: Te
             tg_id=contact.user_id,
             name=name,
             username=username,
+            tenant_id=tenant.id if tenant else None,
         )
         await session.commit()
         logger.info(f"Manager upserted from contact: {manager.name} (tg_id={manager.tg_id})")

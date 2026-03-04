@@ -7,27 +7,29 @@ from app.bot.topics import STATUS_TO_TOPIC_KEY, TopicKey
 from app.bot.ui.message_ref import MessageRef
 from app.bot.ui.tg_edit import archive_message, edit_text
 from app.bot.utils.card import format_lead_card, format_archive_card
-from app.core.config import settings
 from app.db.models.lead import Lead, LeadStatus, Manager
 from app.db.repositories.lead_repository import LeadRepository
 from app.telegram.safe_sender import TelegramSafeSender
 
 
 class LeadService:
-    def __init__(self, repo: LeadRepository, sender: TelegramSafeSender):
+    def __init__(self, repo: LeadRepository, sender: TelegramSafeSender, group_id: int):
         self.repo = repo
         self.sender = sender
+        self.group_id = group_id
 
     async def create_lead(self, data: dict) -> Lead:
         lead = await self.repo.create(data)
         logger.info(f"lead_action=create lead_id={lead.id} source={lead.source}")
-        topic_id = await resolve_topic_thread_id(
-            settings.crm_group_id,
-            TopicKey.NEW,
-            self.repo.session,
-            sender=self.sender,
-            thread_id=None,
-        )
+        topic_id = None
+        if self.group_id:
+            topic_id = await resolve_topic_thread_id(
+                self.group_id,
+                TopicKey.NEW,
+                self.repo.session,
+                sender=self.sender,
+                thread_id=None,
+            )
         ref = await self._post_card(lead, topic_id=topic_id) if topic_id else None
         if ref:
             await self.repo.set_active_card_message(
@@ -156,13 +158,15 @@ class LeadService:
         }
         clone = await self.repo.create(data)
         logger.info(f"lead_action=clone source_id={lead_id} clone_id={clone.id}")
-        topic_id = await resolve_topic_thread_id(
-            settings.crm_group_id,
-            TopicKey.NEW,
-            self.repo.session,
-            sender=self.sender,
-            thread_id=None,
-        )
+        topic_id = None
+        if self.group_id:
+            topic_id = await resolve_topic_thread_id(
+                self.group_id,
+                TopicKey.NEW,
+                self.repo.session,
+                sender=self.sender,
+                thread_id=None,
+            )
         ref = await self._post_card(clone, topic_id=topic_id) if topic_id else None
         if ref:
             await self.repo.set_active_card_message(
@@ -252,9 +256,11 @@ class LeadService:
         return await self.repo.get_manager_by_tg_id(manager_tg_id)
 
     async def _topic_for_status(self, status: LeadStatus) -> int | None:
+        if not self.group_id:
+            return None
         key = STATUS_TO_TOPIC_KEY.get(status, TopicKey.NEW)
         return await resolve_topic_thread_id(
-            settings.crm_group_id,
+            self.group_id,
             key,
             self.repo.session,
             sender=self.sender,
@@ -275,9 +281,11 @@ class LeadService:
                 topic_id=active.topic_id,
                 source="active_record",
             )
+        if not self.group_id:
+            return None
         seeded = await self.repo.ensure_active_card_message(
             lead_id=lead.id,
-            chat_id=settings.crm_group_id,
+            chat_id=self.group_id,
             topic_id=lead.tg_topic_id,
             message_id=lead.tg_message_id,
         )
@@ -291,20 +299,22 @@ class LeadService:
         return None
 
     async def _post_card(self, lead: Lead, topic_id: int) -> MessageRef | None:
+        if not self.group_id:
+            return None
         lead_full = await self.repo.get_by_id(lead.id)
         if not lead_full:
             return None
         text, keyboard = self._build_card_payload(lead_full)
         try:
             msg = await self.sender.send_message(
-                chat_id=settings.crm_group_id,
+                chat_id=self.group_id,
                 message_thread_id=topic_id,
                 text=text,
                 reply_markup=keyboard,
                 parse_mode="HTML",
             )
             return MessageRef(
-                chat_id=settings.crm_group_id,
+                chat_id=self.group_id,
                 message_id=msg.message_id,
                 topic_id=topic_id,
                 source="post_card",

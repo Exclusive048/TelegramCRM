@@ -66,6 +66,9 @@ class Manager(Base):
     tg_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
     name: Mapped[str] = mapped_column(String(255))
     tg_username: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    tenant_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("tenants.id"), nullable=True, index=True
+    )
 
     role: Mapped[ManagerRole] = mapped_column(
         ManagerRoleEnum,
@@ -88,6 +91,9 @@ class Lead(Base):
     __tablename__ = "leads"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tenant_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("tenants.id"), nullable=True, index=True
+    )
     name: Mapped[str] = mapped_column(String(255))
     phone: Mapped[str] = mapped_column(String(50))
     email: Mapped[str | None] = mapped_column(String(255), nullable=True)
