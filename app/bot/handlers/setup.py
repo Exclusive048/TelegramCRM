@@ -99,6 +99,7 @@ async def cmd_start(message: Message, state: FSMContext, sender: TelegramSafeSen
 
     if message.from_user is None:
         return
+
     try:
         member = await message.bot.get_chat_member(message.chat.id, message.from_user.id)
         if member.status not in ("creator", "administrator"):
@@ -169,10 +170,7 @@ async def handle_company_name(message: Message, state: FSMContext, sender: Teleg
     await sender.send_message(
         chat_id=chat_id,
         message_thread_id=thread_id,
-        text=(
-            f"✅ Компания <b>{company_name}</b> зарегистрирована!\n\n"
-            "Выберите как начать:"
-        ),
+        text=f"✅ Компания <b>{company_name}</b> зарегистрирована!\n\nВыберите как начать:",
         reply_markup=builder.as_markup(),
         parse_mode="HTML",
     )
@@ -192,18 +190,17 @@ async def cb_reg_trial(callback: CallbackQuery, sender: TelegramSafeSender):
             return
         await repo.activate_trial(tenant_id, days=settings.trial_days)
         await session.commit()
-        await notify_admin(
-            f"🆓 Пробный период: <b>{tenant.company_name}</b> (ID:{tenant_id})"
-        )
+        await notify_admin(f"🆓 Пробный период: <b>{tenant.company_name}</b> (ID:{tenant_id})")
+
     await callback.answer()
     from datetime import datetime, timezone, timedelta
 
     until = (datetime.now(timezone.utc) + timedelta(days=settings.trial_days)).strftime("%d.%m.%Y")
-    await callback.message.edit_text(
-        f"✅ Пробный период активирован до {until}!\n\n"
-        "Теперь выполните /setup для настройки топиков.",
-        parse_mode="HTML",
-    )
+    if callback.message:
+        await callback.message.edit_text(
+            f"✅ Пробный период активирован до {until}!\n\nТеперь выполните /setup для настройки топиков.",
+            parse_mode="HTML",
+        )
 
 
 @router.callback_query(F.data.startswith("reg:pay:"))
@@ -212,10 +209,10 @@ async def cb_reg_pay(callback: CallbackQuery, sender: TelegramSafeSender):
     await callback.answer()
     payment_url = await _create_yukassa_payment(tenant_id)
     if not payment_url:
-        await callback.message.edit_text(
-            "⚠️ Не удалось создать платёж. Обратитесь в поддержку."
-        )
+        if callback.message:
+            await callback.message.edit_text("⚠️ Не удалось создать платёж. Обратитесь в поддержку.")
         return
+
     builder = InlineKeyboardBuilder()
     builder.row(
         InlineKeyboardButton(
@@ -223,65 +220,68 @@ async def cb_reg_pay(callback: CallbackQuery, sender: TelegramSafeSender):
             url=payment_url,
         )
     )
-    await callback.message.edit_text(
-        "💳 Для оплаты нажмите кнопку ниже.\n"
-        "После оплаты подписка активируется автоматически.",
-        reply_markup=builder.as_markup(),
-    )
+    if callback.message:
+        await callback.message.edit_text(
+            "💳 Для оплаты нажмите кнопку ниже.\nПосле оплаты подписка активируется автоматически.",
+            reply_markup=builder.as_markup(),
+        )
 
 
 @router.message(Command("setup"))
 async def cmd_setup(message: Message, sender: TelegramSafeSender):
     chat_id = message.chat.id
+
+    if message.from_user is None:
+        return
+
     target_tenant = None
 
-    # ????????? ?????? ? ???????
+    # Ищем тенант, привязанный к этому владельцу.
     async with AsyncSessionLocal() as session:
         from app.db.repositories.tenant_repository import TenantRepository
         from master_bot.notify import notify_admin
+
         repo = TenantRepository(session)
 
-        # ????? ??????? ?? owner_tg_id
+        # Получаем все тенанты по owner_tg_id
         tenants = await repo.get_by_owner(message.from_user.id)
-        # ??????? ??????? ? ???????? group_id == 0 (??? ?? ?????????)
-        # ??? group_id == chat_id (??? ???????? ? ???? ??????)
-        target_tenant = None
+
+        # Берём первый подходящий: либо ещё не привязан к группе (group_id == 0),
+        # либо уже привязан к текущей группе (group_id == chat_id).
         for t in tenants:
             if t.group_id == 0 or t.group_id == chat_id:
                 target_tenant = t
                 break
 
         if not target_tenant:
-            # ?????? ?? ?????? ? ?????? ???????????? ?? ???????????????
-            # ? ??????-????. ???????? ??????????.
+            # Пользователь пытается настроить CRM из группы, но регистрация была в мастер-боте.
+            # Показываем куда идти.
             await sender.send_ephemeral_text(
                 chat_id=chat_id,
                 message_thread_id=message.message_thread_id,
                 text=(
-                    "?? ??????? ????????????????? ? ??????-????!
-"
-                    f"???????? ????: @{settings.crm_bot_username.replace('crm_bot', 'crm_master_bot')}"
+                    "❌ Вы ещё не зарегистрировали CRM через мастер-бот.\n"
+                    f"Перейдите в мастер-бот: @{settings.crm_bot_username.replace('crm_bot', 'crm_master_bot')}"
                 ),
                 ttl_sec=60,
             )
             return
 
+        # Если тенант ещё не привязан к группе — привязываем.
         if target_tenant.group_id == 0:
             await repo.bind_group(target_tenant.id, chat_id)
             await session.commit()
             await notify_admin(
-                f"?? ?????? ?????????
-"
-                f"?? {target_tenant.company_name}
-"
-                f"?? group_id: {chat_id}"
+                "✅ Группа привязана к CRM\n"
+                f"🏢 {target_tenant.company_name}\n"
+                f"🆔 group_id: {chat_id}"
             )
 
     if not await is_tg_admin(sender, chat_id, message.from_user.id):
         await sender.send_ephemeral_text(
-            chat_id=message.chat.id,
+            chat_id=chat_id,
             message_thread_id=message.message_thread_id,
-            text="?????? ???????????? ???????????????????????????? ???????????? ?????????? ???????????????????????? /setup.",
+            text="⛔️ Только администратор группы может выполнять /setup.",
             ttl_sec=TTL_ERROR_SEC,
         )
         return
@@ -289,9 +289,9 @@ async def cmd_setup(message: Message, sender: TelegramSafeSender):
     chat = await sender.get_chat(chat_id)
     if not getattr(chat, "is_forum", False):
         await sender.send_ephemeral_text(
-            chat_id=message.chat.id,
+            chat_id=chat_id,
             message_thread_id=message.message_thread_id,
-            text="?????? ?? ???????? ???????????? ???? ???????????????? ???????? (Forum).",
+            text="⛔️ Включите в группе темы (Forum), чтобы настроить CRM.",
             ttl_sec=TTL_ERROR_SEC,
         )
         return
@@ -305,11 +305,12 @@ async def cmd_setup(message: Message, sender: TelegramSafeSender):
         )
 
     progress = await sender.send_ephemeral_text(
-        chat_id=message.chat.id,
+        chat_id=chat_id,
         message_thread_id=message.message_thread_id,
-        text="??? ???????????? ????????????...",
+        text="⚙️ Настраиваю топики...",
         ttl_sec=TTL_MENU_SEC,
     )
+
     created: list[tuple[str, str, int]] = []
     errors: list[tuple[str, str]] = []
 
@@ -368,17 +369,17 @@ async def cmd_setup(message: Message, sender: TelegramSafeSender):
             await ensure_panel_message(sender, chat_id, topic_managers_id)
             logger.info(f"Panel message ensured in topic {topic_managers_id}")
         except Exception as exc:
-            errors.append(("?????????? ????????????????????", str(exc)))
+            errors.append(("Панель управления", str(exc)))
             logger.error(f"Failed to ensure panel message: {exc}")
 
-    summary_lines = ["??? ???????????? ??????????????."]
+    summary_lines = ["✅ Настройка завершена."]
     if created:
-        summary_lines.append(f"?????????????? ??????????: {len(created)}.")
+        summary_lines.append(f"Создано топиков: {len(created)}.")
     if errors:
-        summary_lines.append("????????????:")
+        summary_lines.append("Ошибки:")
         for name, err in errors:
             summary_lines.append(f"- {name}: {err}")
-    summary_lines.append("????????????.")
+    summary_lines.append("Готово.")
 
     await sender.edit_text(
         chat_id=progress.chat.id,
@@ -392,9 +393,10 @@ async def cmd_setup(message: Message, sender: TelegramSafeSender):
         thread_id=progress.message_thread_id,
         ttl_sec=TTL_MENU_SEC,
     )
+
     try:
         await sender.delete_message(
-            chat_id=message.chat.id,
+            chat_id=chat_id,
             message_id=message.message_id,
             thread_id=message.message_thread_id,
         )
@@ -410,6 +412,7 @@ async def cmd_setup(message: Message, sender: TelegramSafeSender):
     if not errors and target_tenant:
         async with AsyncSessionLocal() as session:
             from app.db.repositories.tenant_repository import TenantRepository
+
             repo = TenantRepository(session)
             await repo.complete_onboarding(target_tenant.id)
             await session.commit()
@@ -419,6 +422,9 @@ async def cmd_setup(message: Message, sender: TelegramSafeSender):
 async def cmd_add_manager(message: Message, sender: TelegramSafeSender, tenant=None):
     group_id = tenant.group_id if tenant else None
     if not group_id or message.chat.id != group_id:
+        return
+
+    if message.from_user is None:
         return
 
     if not await is_tg_admin(sender, group_id, message.from_user.id):
@@ -434,14 +440,16 @@ async def cmd_add_manager(message: Message, sender: TelegramSafeSender, tenant=N
         await sender.send_ephemeral_text(
             chat_id=message.chat.id,
             message_thread_id=message.message_thread_id,
-            text="👆 Ответьте на сообщение участника командой /add_manager.",  # FIXED #15
+            text="👆 Ответьте на сообщение участника командой /add_manager.",
             ttl_sec=TTL_ERROR_SEC,
         )
         return
 
     target = message.reply_to_message.from_user
+    if not target:
+        return
 
-    # ???????? ???????
+    # Лимиты по плану
     if tenant and tenant.max_managers != -1:
         async with AsyncSessionLocal() as session:
             repo = LeadRepository(session)
@@ -451,8 +459,8 @@ async def cmd_add_manager(message: Message, sender: TelegramSafeSender, tenant=N
                 chat_id=message.chat.id,
                 message_thread_id=message.message_thread_id,
                 text=(
-                    f"?? ????????? ????? {tenant.max_managers} ?????????? ??? ?????? "
-                    f"{tenant.plan}. ???????? ????? ??? ?????????? ????? ??????????."
+                    f"⚠️ В вашем плане максимум {tenant.max_managers} менеджеров ({tenant.plan}). "
+                    "Оплатите расширение или смените тариф."
                 ),
                 ttl_sec=30,
             )
@@ -467,7 +475,7 @@ async def cmd_add_manager(message: Message, sender: TelegramSafeSender, tenant=N
                 await sender.send_ephemeral_text(
                     chat_id=message.chat.id,
                     message_thread_id=message.message_thread_id,
-                    text=f"ℹ️ {target.full_name} уже является менеджером.",  # FIXED #15
+                    text=f"ℹ️ {target.full_name} уже является менеджером.",
                     ttl_sec=TTL_MENU_SEC,
                 )
             else:
@@ -517,6 +525,9 @@ async def cmd_make_admin(message: Message, sender: TelegramSafeSender, tenant=No
     if not group_id or message.chat.id != group_id:
         return
 
+    if message.from_user is None:
+        return
+
     member = await sender.get_chat_member(group_id, message.from_user.id)
     if not isinstance(member, ChatMemberOwner):
         await sender.send_ephemeral_text(
@@ -531,12 +542,14 @@ async def cmd_make_admin(message: Message, sender: TelegramSafeSender, tenant=No
         await sender.send_ephemeral_text(
             chat_id=message.chat.id,
             message_thread_id=message.message_thread_id,
-            text="👆 Ответьте на сообщение пользователя командой /make_admin.",  # FIXED #15
+            text="👆 Ответьте на сообщение пользователя командой /make_admin.",
             ttl_sec=TTL_ERROR_SEC,
         )
         return
 
     target = message.reply_to_message.from_user
+    if not target:
+        return
 
     async with AsyncSessionLocal() as session:
         repo = LeadRepository(session)
@@ -576,6 +589,9 @@ async def cmd_remove_manager(message: Message, sender: TelegramSafeSender, tenan
     if not group_id or message.chat.id != group_id:
         return
 
+    if message.from_user is None:
+        return
+
     if not await is_tg_admin(sender, group_id, message.from_user.id):
         await sender.send_ephemeral_text(
             chat_id=message.chat.id,
@@ -589,12 +605,14 @@ async def cmd_remove_manager(message: Message, sender: TelegramSafeSender, tenan
         await sender.send_ephemeral_text(
             chat_id=message.chat.id,
             message_thread_id=message.message_thread_id,
-            text="👆 Ответьте на сообщение пользователя командой /remove_manager.",  # FIXED #15
+            text="👆 Ответьте на сообщение пользователя командой /remove_manager.",
             ttl_sec=TTL_ERROR_SEC,
         )
         return
 
     target = message.reply_to_message.from_user
+    if not target:
+        return
 
     async with AsyncSessionLocal() as session:
         repo = LeadRepository(session)
@@ -612,7 +630,7 @@ async def cmd_remove_manager(message: Message, sender: TelegramSafeSender, tenan
         await sender.send_ephemeral_text(
             chat_id=message.chat.id,
             message_thread_id=message.message_thread_id,
-            text=f"ℹ️ {target.full_name} не найден в списке менеджеров.",  # FIXED #15
+            text=f"ℹ️ {target.full_name} не найден в списке менеджеров.",
             ttl_sec=TTL_MENU_SEC,
         )
     try:
@@ -629,6 +647,9 @@ async def cmd_remove_manager(message: Message, sender: TelegramSafeSender, tenan
 async def cmd_managers(message: Message, sender: TelegramSafeSender, tenant=None):
     group_id = tenant.group_id if tenant else None
     if not group_id or message.chat.id != group_id:
+        return
+
+    if message.from_user is None:
         return
 
     if not await is_tg_admin(sender, group_id, message.from_user.id):
@@ -755,13 +776,13 @@ async def _post_topic_menu(
 ):
     text = "Меню действий"
     builder = _build_topic_menu(status)
-    msg = await sender.send_message(  # FIXED #3
+    msg = await sender.send_message(
         chat_id=chat_id,
         message_thread_id=topic_id,
         text=text,
         reply_markup=builder.as_markup(),
     )
     try:
-        await sender.pin_chat_message(chat_id, msg.message_id)  # FIXED #3
+        await sender.pin_chat_message(chat_id, msg.message_id)
     except Exception as exc:
-        logger.warning(f"Could not pin topic menu in topic {topic_id}: {exc}")  # FIXED #3
+        logger.warning(f"Could not pin topic menu in topic {topic_id}: {exc}")
