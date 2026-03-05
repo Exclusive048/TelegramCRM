@@ -135,6 +135,7 @@ services:
       - letsencrypt:/letsencrypt
     networks:
       - web
+      - internal
     logging:
       driver: "json-file"
       options:
