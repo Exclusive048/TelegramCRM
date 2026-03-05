@@ -84,7 +84,7 @@ async def is_force_reply(message: Message, state: FSMContext) -> bool:
         logger.debug(f"is_force_reply FAIL: thread mismatch {message.message_thread_id} != {thread_id}")
         return False
     if message.from_user is None or message.from_user.id != user_id:
-        logger.debug(f"is_force_reply FAIL: user mismatch")
+        logger.debug("is_force_reply FAIL: user mismatch")
         return False
     if message.reply_to_message is None:
         logger.debug("is_force_reply FAIL: no reply_to_message")
