@@ -14,6 +14,7 @@ def _ensure_env():
     os.environ.setdefault("BOT_TOKEN", "123:TEST_TOKEN")
     os.environ.setdefault("CRM_GROUP_ID", "1")
     os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://user:pass@localhost:5432/db")
+    os.environ.setdefault("PUBLIC_DOMAIN", "example.com")
     os.environ.setdefault("API_SECRET_KEY", "dev")
 
 
@@ -25,7 +26,7 @@ def main() -> int:
     _ensure_env()
 
     from app.core.config import settings  # noqa: WPS433
-    from main import create_app  # noqa: WPS433
+    from app.bootstrap import create_app  # noqa: WPS433
 
     bot = Bot(token=settings.bot_token, default=DefaultBotProperties(parse_mode="HTML"))
     sender = TelegramSafeSender(bot, limiter=ChatRateLimiter(min_delay_sec=1.1))

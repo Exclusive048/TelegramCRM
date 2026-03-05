@@ -1,4 +1,4 @@
-.PHONY: lint typecheck encoding migrations smoke check
+.PHONY: lint typecheck encoding migrations smoke pytest health check
 
 lint:
 	python -m ruff check .
@@ -15,4 +15,10 @@ migrations:
 smoke:
 	python -m scripts.smoke
 
-check: lint typecheck encoding migrations smoke
+pytest:
+	pytest
+
+health:
+	curl -f http://localhost:8000/health
+
+check: lint typecheck encoding migrations smoke pytest
