@@ -1,0 +1,11 @@
+from aiogram import Router
+
+from master_bot.admin import router as admin_router
+from master_bot.handlers import router as master_router
+
+
+def build_master_router() -> Router:
+    router = Router()
+    router.include_router(admin_router)
+    router.include_router(master_router)
+    return router

@@ -1,12 +1,11 @@
 version: "3.9"
 
 services:
-
-  # ── Приложение (оба бота + FastAPI) ────────────────────────────────────────
-  app:
+  api:
     image: ${DOCKER_IMAGE:-telegramcrm:latest}
     build: .
     restart: always
+    command: ["python", "-m", "app.entrypoints.api"]
     environment:
       DATABASE_URL: ${DATABASE_URL}
       REDIS_URL: ${REDIS_URL}
@@ -53,13 +52,95 @@ services:
       - "traefik.http.routers.crm.entrypoints=websecure"
       - "traefik.http.routers.crm.tls.certresolver=letsencrypt"
       - "traefik.http.services.crm.loadbalancer.server.port=8000"
-      # Redirect HTTP → HTTPS
       - "traefik.http.routers.crm-http.rule=Host(`${PUBLIC_DOMAIN}`)"
       - "traefik.http.routers.crm-http.entrypoints=web"
       - "traefik.http.routers.crm-http.middlewares=redirect-to-https"
       - "traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https"
 
-  # ── PostgreSQL ──────────────────────────────────────────────────────────────
+  crm-bot:
+    image: ${DOCKER_IMAGE:-telegramcrm:latest}
+    build: .
+    restart: always
+    command: ["python", "-m", "app.entrypoints.crm_bot"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: ${REDIS_URL}
+      USE_REDIS: ${USE_REDIS}
+      BOT_TOKEN: ${BOT_TOKEN}
+      MASTER_BOT_TOKEN: ${MASTER_BOT_TOKEN}
+      CRM_BOT_USERNAME: ${CRM_BOT_USERNAME}
+      MASTER_ADMIN_TG_ID: ${MASTER_ADMIN_TG_ID}
+      API_HOST: ${API_HOST}
+      API_PORT: ${API_PORT}
+      PUBLIC_DOMAIN: ${PUBLIC_DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL}
+      SUBSCRIPTION_PRICE: ${SUBSCRIPTION_PRICE}
+      SUBSCRIPTION_DAYS: ${SUBSCRIPTION_DAYS}
+      TRIAL_DAYS: ${TRIAL_DAYS}
+      REFERRAL_BONUS_DAYS: ${REFERRAL_BONUS_DAYS}
+      SUPPORT_USERNAME: ${SUPPORT_USERNAME}
+      SLA_NEW_HOURS: ${SLA_NEW_HOURS}
+      SLA_IN_PROGRESS_DAYS: ${SLA_IN_PROGRESS_DAYS}
+      YUKASSA_SHOP_ID: ${YUKASSA_SHOP_ID}
+      YUKASSA_SECRET_KEY: ${YUKASSA_SECRET_KEY}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - internal
+      - web
+    healthcheck:
+      disable: true
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  master-bot:
+    image: ${DOCKER_IMAGE:-telegramcrm:latest}
+    build: .
+    restart: always
+    command: ["python", "-m", "app.entrypoints.master_bot"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: ${REDIS_URL}
+      USE_REDIS: ${USE_REDIS}
+      BOT_TOKEN: ${BOT_TOKEN}
+      MASTER_BOT_TOKEN: ${MASTER_BOT_TOKEN}
+      CRM_BOT_USERNAME: ${CRM_BOT_USERNAME}
+      MASTER_ADMIN_TG_ID: ${MASTER_ADMIN_TG_ID}
+      API_HOST: ${API_HOST}
+      API_PORT: ${API_PORT}
+      PUBLIC_DOMAIN: ${PUBLIC_DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL}
+      SUBSCRIPTION_PRICE: ${SUBSCRIPTION_PRICE}
+      SUBSCRIPTION_DAYS: ${SUBSCRIPTION_DAYS}
+      TRIAL_DAYS: ${TRIAL_DAYS}
+      REFERRAL_BONUS_DAYS: ${REFERRAL_BONUS_DAYS}
+      SUPPORT_USERNAME: ${SUPPORT_USERNAME}
+      SLA_NEW_HOURS: ${SLA_NEW_HOURS}
+      SLA_IN_PROGRESS_DAYS: ${SLA_IN_PROGRESS_DAYS}
+      YUKASSA_SHOP_ID: ${YUKASSA_SHOP_ID}
+      YUKASSA_SECRET_KEY: ${YUKASSA_SECRET_KEY}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - internal
+      - web
+    healthcheck:
+      disable: true
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
   postgres:
     image: postgres:16-alpine
     restart: always
@@ -83,9 +164,7 @@ services:
       options:
         max-size: "20m"
         max-file: "3"
-    # Порт НЕ проброшен наружу — только внутренняя сеть
 
-  # ── Redis ───────────────────────────────────────────────────────────────────
   redis:
     image: redis:7-alpine
     restart: always
@@ -110,9 +189,7 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-    # Порт НЕ проброшен наружу
 
-  # ── Traefik (reverse proxy + SSL) ──────────────────────────────────────────
   traefik:
     image: traefik:v2.11
     restart: always
@@ -142,7 +219,6 @@ services:
         max-size: "10m"
         max-file: "3"
 
-  # ── Backup PostgreSQL (раз в сутки) ─────────────────────────────────────────
   postgres-backup:
     image: prodrigestivill/postgres-backup-local:16
     restart: always
@@ -166,7 +242,7 @@ services:
 networks:
   internal:
     driver: bridge
-    internal: true   # нет доступа в интернет — только между контейнерами
+    internal: true
   web:
     driver: bridge
 
