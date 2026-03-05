@@ -733,7 +733,6 @@ async def handle_create_lead_name(
     sender: TelegramSafeSender,
     tenant=None,
 ):
-    group_id = _get_group_id(tenant)
 
     if not await reject_non_force_reply(message, state, sender):
         return
@@ -767,7 +766,6 @@ async def handle_create_lead_phone(
     sender: TelegramSafeSender,
     tenant=None,
 ):
-    group_id = _get_group_id(tenant)
 
     if not await reject_non_force_reply(message, state, sender):
         return
@@ -814,8 +812,7 @@ async def handle_create_lead_email(
     sender: TelegramSafeSender,
     tenant=None,
 ):
-    group_id = _get_group_id(tenant)
-
+ 
     if not await reject_non_force_reply(message, state, sender):
         return
     email_raw = (message.text or "").strip()
@@ -847,8 +844,7 @@ async def handle_create_lead_service(
     sender: TelegramSafeSender,
     tenant=None,
 ):
-    group_id = _get_group_id(tenant)
-
+ 
     if not await reject_non_force_reply(message, state, sender):
         return
     service_raw = (message.text or "").strip()
