@@ -137,7 +137,7 @@ async def main():
 
     master_tasks = []
     if settings.master_bot_token:
-        from aiogram.fsm.storage.memory import MemoryStorage as MasterMemory
+        from aiogram.fsm.storage.redis import RedisStorage
         from master_bot.handlers import router as master_router
         from master_bot.admin import router as admin_router
         from master_bot.notify import set_master_bot
@@ -155,7 +155,8 @@ async def main():
             logger.warning(f"Could not clear master bot webhook: {e}")
 
         set_master_bot(master_bot_instance)
-        master_dp = Dispatcher(storage=MasterMemory())
+        master_storage = RedisStorage.from_url(settings.redis_url)
+        master_dp = Dispatcher(storage=master_storage)
         master_dp.include_router(admin_router)
         master_dp.include_router(master_router)
         master_tasks.append(
