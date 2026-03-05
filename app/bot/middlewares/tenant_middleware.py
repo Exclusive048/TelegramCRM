@@ -31,23 +31,24 @@ class TenantMiddleware(BaseMiddleware):
             if command in EXCLUDED_COMMANDS:
                 return await handler(event, data)
 
-        # Получить chat_id
         chat_id = None
         if isinstance(event, Message):
             chat_id = event.chat.id
+            logger.debug(f"middleware: message chat_id={chat_id} text={event.text!r} thread={event.message_thread_id}")
         elif isinstance(event, CallbackQuery) and event.message:
             chat_id = event.message.chat.id
 
         if not chat_id or chat_id > 0:
-            # Личные сообщения (chat_id > 0) — пропускаем без проверки тенанта
+            logger.debug(f"middleware: private chat or no chat_id, skip tenant check")
             return await handler(event, data)
 
         async with AsyncSessionLocal() as session:
             repo = TenantRepository(session)
             tenant = await repo.get_by_group_id(chat_id)
+            logger.debug(f"middleware: tenant={tenant.id if tenant else None} for chat_id={chat_id}")
 
             if not tenant:
-                # Группа не зарегистрирована — молчим (бот добавлен, но /start не написали)
+                logger.warning(f"middleware: no tenant for chat_id={chat_id}, dropping")
                 return
 
             # Авто-деактивация при истечении подписки
