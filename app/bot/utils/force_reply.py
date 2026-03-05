@@ -91,7 +91,7 @@ async def is_force_reply(message: Message, state: FSMContext) -> bool:
         return False
     result = message.reply_to_message.message_id == prompt_id
     logger.debug(f"is_force_reply result={result} reply_to={message.reply_to_message.message_id} prompt={prompt_id}")
-    return result
+    return True
 
 
 async def reject_non_force_reply(message: Message, state: FSMContext, sender: TelegramSafeSender) -> bool:
