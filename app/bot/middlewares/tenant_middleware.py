@@ -86,10 +86,10 @@ class TenantMiddleware(BaseMiddleware):
                         await event.answer(text, show_alert=True)
                 except Exception:
                     pass
-                logger.debug(f"[MW] tenant inactive → DROP")
+                logger.debug("[MW] tenant inactive → DROP")
                 return
 
             data["tenant"] = tenant
-            logger.debug(f"[MW] tenant OK → pass to handler")
+            logger.debug("[MW] tenant OK → pass to handler")
 
         return await handler(event, data)
