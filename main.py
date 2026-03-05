@@ -10,12 +10,13 @@ from loguru import logger
 from app.core.config import settings
 from app.api.routes import leads as leads_router
 from app.api.routes import yukassa_webhook as yukassa_router
-from app.bot.handlers import lead_callbacks, setup, cabinet, panel  # FIXED #14
+from app.bot.handlers import lead_callbacks, setup, cabinet, panel
 from app.bot.middlewares.sender_middleware import SenderMiddleware
 from app.services.message_deletion_service import MessageDeletionService
 from app.services.reminder_service import ReminderService
 from app.services.subscription_scheduler import start_subscription_scheduler
 from app.telegram.safe_sender import TelegramSafeSender, ChatRateLimiter
+
 
 def create_app(bot: Bot, sender: TelegramSafeSender) -> FastAPI:
     app = FastAPI(docs_url="/api/docs", redoc_url=None, title="TelegramCRM API", version="1.0")
@@ -31,13 +32,7 @@ def create_app(bot: Bot, sender: TelegramSafeSender) -> FastAPI:
     return app
 
 
-async def start_bot(dp: Dispatcher, bot: Bot):
-    logger.info("Starting bot polling...")
-    await dp.start_polling(bot, allowed_updates=["message", "callback_query"])
-
-
 async def start_bot_with_retry(dp: Dispatcher, bot: Bot):
-    """Запускает polling с автоматическим перезапуском при сетевых ошибках."""
     from aiohttp import ClientError
     from aiogram.exceptions import TelegramNetworkError
 
@@ -50,6 +45,7 @@ async def start_bot_with_retry(dp: Dispatcher, bot: Bot):
                 bot,
                 allowed_updates=["message", "callback_query"],
                 handle_signals=False,
+                drop_pending_updates=False,
             )
         except (TelegramNetworkError, ClientError, asyncio.TimeoutError) as e:
             logger.warning(f"Bot polling network error: {e}. Retry in {backoff}s...")
@@ -62,7 +58,6 @@ async def start_bot_with_retry(dp: Dispatcher, bot: Bot):
 
 
 async def start_api_server(app: FastAPI):
-    """Запускает FastAPI/uvicorn сервер."""
     config = uvicorn.Config(
         app,
         host=settings.api_host,
@@ -85,14 +80,20 @@ def handle_exception(loop, context):
 
 async def main():
     logger.info("Start TelegramCRM bot")
-    logger.info("Starting TelegramCRM bot. Ensure 'python migrate.py dev' was run before first launch.")  # FIXED #4
+    logger.info("Starting TelegramCRM bot. Ensure 'python migrate.py dev' was run before first launch.")
 
     bot = Bot(token=settings.bot_token, default=DefaultBotProperties(parse_mode="HTML"))
+
+    # Сбросить вебхук при старте чтобы polling работал корректно
+    try:
+        await bot.delete_webhook(drop_pending_updates=False)
+        logger.info("Webhook cleared")
+    except Exception as e:
+        logger.warning(f"Could not clear webhook: {e}")
 
     deletion_service = None
     if settings.use_redis:
         from redis.asyncio import Redis
-
         redis_client = Redis.from_url(settings.redis_url, decode_responses=True)
         deletion_service = MessageDeletionService(redis_client)
         logger.info("Message deletion service: Redis")
@@ -107,14 +108,13 @@ async def main():
         deletion_service=deletion_service,
     )
 
-    # Storage: Redis если USE_REDIS=true, иначе Memory
     if settings.use_redis:
         from aiogram.fsm.storage.redis import RedisStorage
         storage = RedisStorage.from_url(settings.redis_url)
         logger.info("FSM storage: Redis")
     else:
         storage = MemoryStorage()
-        logger.info("FSM storage: Memory. Not recommended for production! For using Redis, set USE_REDIS=true and provide REDIS_URL in .env")
+        logger.warning("FSM storage: Memory. Not recommended for production!")
 
     dp = Dispatcher(storage=storage)
     dp["sender"] = sender
@@ -124,7 +124,7 @@ async def main():
     dp.include_router(lead_callbacks.router)
     dp.include_router(setup.router)
     dp.include_router(cabinet.router)
-    dp.include_router(panel.router)  # FIXED #14
+    dp.include_router(panel.router)
 
     await deletion_service.start(sender)
     await ReminderService.start_scheduler(sender)
@@ -146,6 +146,14 @@ async def main():
             token=settings.master_bot_token,
             default=DefaultBotProperties(parse_mode="HTML"),
         )
+
+        # Сбросить вебхук мастер-бота
+        try:
+            await master_bot_instance.delete_webhook(drop_pending_updates=False)
+            logger.info("Master bot webhook cleared")
+        except Exception as e:
+            logger.warning(f"Could not clear master bot webhook: {e}")
+
         set_master_bot(master_bot_instance)
         master_dp = Dispatcher(storage=MasterMemory())
         master_dp.include_router(admin_router)
@@ -166,5 +174,4 @@ async def main():
 
 
 if __name__ == "__main__":
-    
     asyncio.run(main())
