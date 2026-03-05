@@ -95,49 +95,46 @@ jobs:
           key: ${{ secrets.VPS_SSH_KEY }}
           port: ${{ secrets.VPS_PORT || 22 }}
           script: |
-            set -e
+            set -euo pipefail
 
-            echo "=== Deploy started: $(date) ==="
+            echo "=== Deploy started: $(date -u) ==="
             cd /opt/telegramcrm
 
-            # Скачать свежий код
-            git pull origin main
+            # 1) Code update
+            git fetch origin main
+            git reset --hard origin/main
 
-            # Залогиниться в GHCR
-            echo "${{ secrets.GITHUB_TOKEN }}" | \
-              docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            # 2) Login to GHCR (лучше использовать PAT, но оставляю как есть)
+            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
 
-            # Обновить образ
+            # 3) Образ
             export DOCKER_IMAGE=ghcr.io/exclusive048/telegramcrm:latest
-            docker compose pull app
 
-            # Применить миграции БД перед рестартом
-            docker compose run --rm app python migrate.py dev
+            # 4) Подтверди имена сервисов (ОБЯЗАТЕЛЬНО ПРОВЕРЬ!)
+            API_SVC="api"
+            CRM_BOT_SVC="crm-bot"
+            MASTER_BOT_SVC="master-bot"
 
-            # Перезапустить только app (postgres и redis не трогать)
-            docker compose up -d --no-deps app
+            echo "=== Compose services ==="
+            docker compose config --services
 
-            # Подождать пока app станет healthy
-            echo "=== Waiting for healthcheck ==="
-            for i in $(seq 1 12); do
-              STATUS=$(docker compose ps app --format json | python3 -c \
-                "import sys,json; d=json.load(sys.stdin); print(d.get('Health','unknown'))" \
-                2>/dev/null || echo "starting")
-              echo "  attempt $i: $STATUS"
-              if [ "$STATUS" = "healthy" ]; then
-                echo "=== App is healthy! ==="
-                break
-              fi
-              sleep 5
-            done
+            echo "=== Pull images ==="
+            docker compose pull "$API_SVC" "$CRM_BOT_SVC" "$MASTER_BOT_SVC"
 
-            # Проверить что всё живо
+            echo "=== Run migrations (one-off) ==="
+            # Важно: миграции гоняем только один раз (обычно из API контейнера)
+            docker compose run --rm "$API_SVC" python migrate.py dev
+
+            echo "=== Restart services ==="
+            docker compose up -d --no-deps --force-recreate "$API_SVC" "$CRM_BOT_SVC" "$MASTER_BOT_SVC"
+
+            echo "=== Status ==="
             docker compose ps
 
-            # Очистить старые образы
+            echo "=== Cleanup ==="
             docker image prune -f
 
-            echo "=== Deploy finished: $(date) ==="
+            echo "=== Deploy finished: $(date -u) ==="
 
       - name: Notify on success
         if: success()
