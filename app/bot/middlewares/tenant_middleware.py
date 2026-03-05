@@ -24,6 +24,15 @@ class TenantMiddleware(BaseMiddleware):
         event: TelegramObject,
         data: Dict[str, Any],
     ) -> Any:
+        if isinstance(event, Message):
+            logger.debug(
+                f"INCOMING MESSAGE: chat_id={event.chat.id} "
+                f"chat_type={event.chat.type} "
+                f"thread_id={event.message_thread_id} "
+                f"from={event.from_user.id if event.from_user else None} "
+                f"text={event.text!r} "
+                f"reply_to={event.reply_to_message.message_id if event.reply_to_message else None}"
+            )
         EXCLUDED_COMMANDS = {"/start", "/pay", "/help", "/setup"}
 
         if isinstance(event, Message) and event.text:
