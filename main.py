@@ -140,6 +140,7 @@ async def main():
     if settings.master_bot_token:
         from aiogram.fsm.storage.memory import MemoryStorage as MasterMemory
         from master_bot.handlers import router as master_router
+        from master_bot.admin import router as admin_router
         from master_bot.notify import set_master_bot
 
         master_bot_instance = Bot(
@@ -148,6 +149,7 @@ async def main():
         )
         set_master_bot(master_bot_instance)
         master_dp = Dispatcher(storage=MasterMemory())
+        master_dp.include_router(admin_router)
         master_dp.include_router(master_router)
         master_tasks.append(
             asyncio.create_task(

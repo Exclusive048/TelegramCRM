@@ -10,7 +10,7 @@ class Tenant(Base):
     __tablename__ = "tenants"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    group_id: Mapped[int] = mapped_column(BigInteger, unique=True, nullable=False, index=True)
+    group_id: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="0", index=True)
     owner_tg_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     company_name: Mapped[str] = mapped_column(String(255), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
