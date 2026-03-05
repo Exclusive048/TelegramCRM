@@ -404,7 +404,7 @@ async def cb_adm_msg(callback: CallbackQuery):
     )
 
 
-@router.message(F.chat.type == "private", ~F.text.startswith("/"))
+@router.message(F.chat.type == "private", ~F.text.startswith("/"), F.from_user.func(lambda u: u.id == settings.master_admin_tg_id))
 async def handle_admin_freetext(message: Message):
     """Перехватывает текст от админа когда он в режиме отправки сообщения клиенту."""
     if not is_admin(message.from_user.id):

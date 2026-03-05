@@ -89,6 +89,7 @@ def _account_keyboard(tenant: Tenant) -> InlineKeyboardBuilder:
 
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext, command: CommandObject):
+    logger.debug(f"[MASTER] cmd_start from={message.from_user.id} chat_type={message.chat.type}")
     if message.chat.type != "private":
         return
 
@@ -122,8 +123,15 @@ async def cmd_start(message: Message, state: FSMContext, command: CommandObject)
 
 # ── Ввод названия компании ─────────────────────────────────────────────────────
 
+@router.message()
+async def debug_catch_all(message: Message, state: FSMContext):
+    current = await state.get_state()
+    logger.debug(f"[MASTER] CATCH_ALL: from={message.from_user.id} text={message.text!r} state={current} chat_type={message.chat.type}")
+
+
 @router.message(RegState.waiting_for_name)
 async def handle_company_name(message: Message, state: FSMContext):
+    logger.debug(f"[MASTER] handle_company_name CALLED from={message.from_user.id} text={message.text!r}")
     name = (message.text or "").strip()
     if len(name) < 2:
         await message.answer("Название слишком короткое. Минимум 2 символа:")
