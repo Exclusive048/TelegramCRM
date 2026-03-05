@@ -17,7 +17,6 @@ from app.services.reminder_service import ReminderService
 from app.services.subscription_scheduler import start_subscription_scheduler
 from app.telegram.safe_sender import TelegramSafeSender, ChatRateLimiter
 
-
 def create_app(bot: Bot, sender: TelegramSafeSender) -> FastAPI:
     app = FastAPI(docs_url="/api/docs", redoc_url=None, title="TelegramCRM API", version="1.0")
     app.state.bot = bot
@@ -167,4 +166,5 @@ async def main():
 
 
 if __name__ == "__main__":
+    
     asyncio.run(main())
