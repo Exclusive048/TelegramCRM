@@ -13,9 +13,9 @@ from app.bootstrap import (
     init_storage,
     start_bot_with_retry,
 )
-from app.bot.handlers import cabinet, lead_callbacks, panel, setup
 from app.bot.middlewares.sender_middleware import SenderMiddleware
 from app.bot.middlewares.tenant_middleware import TenantMiddleware
+from app.bot.routers_crm import build_crm_router
 from app.core.config import settings
 from app.services.reminder_service import ReminderService
 from app.services.subscription_scheduler import start_subscription_scheduler
@@ -43,10 +43,7 @@ async def main() -> None:
     dp["sender"] = sender
     dp.update.middleware(SenderMiddleware())
     dp.update.outer_middleware(TenantMiddleware())
-    dp.include_router(lead_callbacks.router)
-    dp.include_router(setup.router)
-    dp.include_router(cabinet.router)
-    dp.include_router(panel.router)
+    dp.include_router(build_crm_router())
 
     if settings.master_bot_token:
         master_bot = Bot(

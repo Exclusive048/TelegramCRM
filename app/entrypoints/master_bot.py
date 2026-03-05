@@ -13,8 +13,7 @@ from app.bootstrap import (
     start_bot_with_retry,
 )
 from app.core.config import settings
-from master_bot.admin import router as admin_router
-from master_bot.handlers import router as master_router
+from master_bot.routers_master import build_master_router
 from master_bot.notify import set_master_bot
 
 
@@ -36,8 +35,7 @@ async def main() -> None:
 
     storage = init_storage(use_redis=True, redis_url=settings.redis_url)
     dp = Dispatcher(storage=storage)
-    dp.include_router(admin_router)
-    dp.include_router(master_router)
+    dp.include_router(build_master_router())
 
     configure_event_loop()
     await start_bot_with_retry(dp, bot)
