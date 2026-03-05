@@ -329,7 +329,19 @@ async def handle_lead_action(
             return
 
     logger.warning(f"Unhandled lead action: {action} for lead_id={lead_id}")
-
+# TEMP DEBUG — удалить после диагностики
+@router.message()
+async def debug_all_messages(message: Message, state: FSMContext):
+    current_state = await state.get_state()
+    logger.debug(
+        f"DEBUG MSG: chat_id={message.chat.id} "
+        f"chat_type={message.chat.type} "
+        f"thread={message.message_thread_id} "
+        f"from={message.from_user.id if message.from_user else None} "
+        f"text={message.text!r} "
+        f"state={current_state} "
+        f"reply_to={message.reply_to_message.message_id if message.reply_to_message else None}"
+    )
 
 @router.message(AmountState.waiting_for_amount)
 async def handle_amount_input(
