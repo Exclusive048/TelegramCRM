@@ -125,7 +125,7 @@ async def handle_lead_action(
         return
     lead_id = int(lead_id_raw)
     source_ref = MessageRef.from_callback(callback)
-    group_id = _get_group_id(tenant) or (message.chat.id if message.chat.id < 0 else None)
+    group_id = _get_group_id(tenant) or (callback.message.chat.id if callback.message.chat.id < 0 else None)
     if not group_id and callback.message:
         group_id = callback.message.chat.id
 
