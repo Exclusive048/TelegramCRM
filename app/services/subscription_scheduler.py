@@ -55,9 +55,9 @@ async def _check_subscriptions():
             )
             await notify_tenant_owner(
                 tenant.owner_tg_id,
-                f"⏰ <b>Подписка истекла</b>\n\n"
-                f"Доступ к CRM приостановлен.\n"
-                f"Напишите /start для продления подписки."
+                "⏰ <b>Подписка истекла</b>\n\n"
+                "Доступ к CRM приостановлен.\n"
+                "Напишите /start для продления подписки."
             )
             continue
 
@@ -81,7 +81,7 @@ async def _check_subscriptions():
                     f"⚠️ <b>Подписка истекает через {days_left} дн.</b>\n\n"
                     f"🏢 {tenant.company_name}\n"
                     f"📅 Дата: {sub_until.strftime('%d.%m.%Y')}\n\n"
-                    f"Продлите подписку чтобы не потерять доступ: /start"
+                    "Продлите подписку чтобы не потерять доступ: /start"
                 )
                 logger.info(
                     f"expiry_warning_sent tenant_id={tenant.id} days_left={days_left}"
