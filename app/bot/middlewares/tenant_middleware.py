@@ -39,7 +39,7 @@ class TenantMiddleware(BaseMiddleware):
             chat_id = event.message.chat.id
 
         if not chat_id or chat_id > 0:
-            logger.debug(f"middleware: private chat or no chat_id, skip tenant check")
+            logger.debug("middleware: private chat or no chat_id, skip tenant check")
             return await handler(event, data)
 
         async with AsyncSessionLocal() as session:
