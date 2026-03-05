@@ -114,13 +114,12 @@ services:
 
   # ── Traefik (reverse proxy + SSL) ──────────────────────────────────────────
   traefik:
-    image: traefik:v3.0
+    image: traefik:v2.11
     restart: always
     command:
       - "--api.dashboard=false"
-      - "--providers.docker=true"
-      - "--providers.docker.exposedbydefault=false"
-      - "--providers.docker.network=web" 
+      - "--providers.file.filename=/etc/traefik/dynamic.yml"
+      - "--providers.file.watch=true"
       - "--entrypoints.web.address=:80"
       - "--entrypoints.websecure.address=:443"
       - "--certificatesresolvers.letsencrypt.acme.httpchallenge=true"
@@ -132,7 +131,7 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /opt/telegramcrm/traefik:/etc/traefik:ro
       - letsencrypt:/letsencrypt
     networks:
       - web
