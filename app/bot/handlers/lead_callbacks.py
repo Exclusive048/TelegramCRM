@@ -339,9 +339,6 @@ async def handle_amount_input(
     tenant=None,
 ):
     group_id = _get_group_id(tenant)
-    if not group_id or message.chat.id != group_id:
-        await state.clear()
-        return
     if not await reject_non_force_reply(message, state, sender):
         return
 
@@ -414,9 +411,6 @@ async def handle_custom_reject(
     tenant=None,
 ):
     group_id = _get_group_id(tenant)
-    if not group_id or message.chat.id != group_id:
-        await state.clear()
-        return
     if not await reject_non_force_reply(message, state, sender):
         return
 
@@ -489,9 +483,7 @@ async def handle_note_text(
     tenant=None,
 ):
     group_id = _get_group_id(tenant)
-    if not group_id or message.chat.id != group_id:
-        await state.clear()
-        return
+
     if not await reject_non_force_reply(message, state, sender):
         return
 
@@ -561,9 +553,7 @@ async def handle_custom_reminder_time(
     tenant=None,
 ):
     group_id = _get_group_id(tenant)
-    if not group_id or message.chat.id != group_id:
-        await state.clear()
-        return
+
     if not await reject_non_force_reply(message, state, sender):
         return
 
@@ -744,9 +734,7 @@ async def handle_create_lead_name(
     tenant=None,
 ):
     group_id = _get_group_id(tenant)
-    if not group_id or message.chat.id != group_id:
-        await state.clear()
-        return
+
     if not await reject_non_force_reply(message, state, sender):
         return
     name = (message.text or "").strip()
@@ -780,9 +768,7 @@ async def handle_create_lead_phone(
     tenant=None,
 ):
     group_id = _get_group_id(tenant)
-    if not group_id or message.chat.id != group_id:
-        await state.clear()
-        return
+
     if not await reject_non_force_reply(message, state, sender):
         return
     phone = (message.text or "").strip()
@@ -829,9 +815,7 @@ async def handle_create_lead_email(
     tenant=None,
 ):
     group_id = _get_group_id(tenant)
-    if not group_id or message.chat.id != group_id:
-        await state.clear()
-        return
+
     if not await reject_non_force_reply(message, state, sender):
         return
     email_raw = (message.text or "").strip()
@@ -864,9 +848,7 @@ async def handle_create_lead_service(
     tenant=None,
 ):
     group_id = _get_group_id(tenant)
-    if not group_id or message.chat.id != group_id:
-        await state.clear()
-        return
+
     if not await reject_non_force_reply(message, state, sender):
         return
     service_raw = (message.text or "").strip()
@@ -887,9 +869,7 @@ async def handle_create_lead_comment(
     tenant=None,
 ):
     group_id = _get_group_id(tenant)
-    if not group_id or message.chat.id != group_id:
-        await state.clear()
-        return
+
     if not await reject_non_force_reply(message, state, sender):
         return
     comment = (message.text or "").strip()
