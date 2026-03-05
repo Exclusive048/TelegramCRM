@@ -120,6 +120,7 @@ services:
       - "--api.dashboard=false"
       - "--providers.docker=true"
       - "--providers.docker.exposedbydefault=false"
+      - "--providers.docker.network=web" 
       - "--entrypoints.web.address=:80"
       - "--entrypoints.websecure.address=:443"
       - "--certificatesresolvers.letsencrypt.acme.httpchallenge=true"
