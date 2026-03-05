@@ -57,25 +57,39 @@ def _tenant_detail_text(tenant: Tenant) -> str:
 
 
 def _account_keyboard(tenant: Tenant) -> InlineKeyboardBuilder:
+    from datetime import datetime, timezone
     b = InlineKeyboardBuilder()
-    if not tenant.is_active or (
-        tenant.subscription_until
-        and (tenant.subscription_until - datetime.now(timezone.utc)).days < 7
-    ):
+    now = datetime.now(timezone.utc)
+
+    # ?????? ?????? ? ?????????? ?????? ????? ?????? ?????
+    # ???????? ??????? ? ?? ????????? ?????? 7 ????
+    show_pay = True
+    if (tenant.is_active
+            and tenant.subscription_until
+            and (tenant.subscription_until - now).days > 7):
+        show_pay = False
+
+    if show_pay:
+        if tenant.is_active:
+            label = "?? ???????? ????????"
+        else:
+            label = "?? ???????? ????????"
         b.row(InlineKeyboardButton(
-            text="💳 Оплатить / Продлить",
-            callback_data=f"acc:pay:{tenant.id}",
+            text=label,
+            callback_data=f"acc:pay:{tenant.id}"
         ))
-    if tenant.subscription_until and tenant.is_active:
+
+    if tenant.api_key:
         b.row(InlineKeyboardButton(
-            text="🔑 Мои API ключи",
-            callback_data=f"acc:keys:{tenant.id}",
+            text="?? ??? API ?????",
+            callback_data=f"acc:keys:{tenant.id}"
         ))
+
     b.row(InlineKeyboardButton(
-        text="👥 Реферальная программа",
-        callback_data=f"acc:ref:{tenant.id}",
+        text="?? ??????????? ?????????",
+        callback_data=f"acc:ref:{tenant.id}"
     ))
-    b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="main:back"))
+    b.row(InlineKeyboardButton(text="?? ?????", callback_data="main:back"))
     return b
 
 
@@ -253,48 +267,106 @@ async def cb_reg_trial(callback: CallbackQuery):
     await _send_activation_message(callback.message, tenant, api_key)
 
 
-@router.callback_query(F.data.startswith("reg:pay:") | F.data.startswith("acc:pay:"))
-async def cb_pay(callback: CallbackQuery):
+async def _process_payment(callback: CallbackQuery) -> None:
+    """????? ?????? ???????? ??????? ??? reg:pay: ? acc:pay:"""
     parts = callback.data.split(":")
     tenant_id = int(parts[2])
+
     async with AsyncSessionLocal() as session:
         repo = TenantRepository(session)
         tenant = await repo.get_by_id(tenant_id)
+
     if not tenant or tenant.owner_tg_id != callback.from_user.id:
-        await callback.answer("Ошибка доступа", show_alert=True)
+        await callback.answer("?????? ???????", show_alert=True)
         return
+
     await callback.answer()
 
+    # ???? ?????? ?? ????????? ? ???????? ????????
+    if not settings.yukassa_shop_id or not settings.yukassa_secret_key:
+        builder = InlineKeyboardBuilder()
+        builder.row(InlineKeyboardButton(
+            text="?? ?????", callback_data=f"acc:detail:{tenant_id}"
+        ))
+        await callback.message.edit_text(
+            f"?? <b>?????? ????????</b>
+
+"
+            f"?? {tenant.company_name}
+"
+            f"?? ?????: {settings.subscription_price} ???/???
+
+"
+            f"?? ??????-?????? ???????? ??????????.
+"
+            f"????????? ? ??????????: {settings.support_username}",
+            reply_markup=builder.as_markup(),
+            parse_mode="HTML",
+        )
+        return
+
     from app.services.yukassa_service import create_yukassa_payment
-    payment_url = await create_yukassa_payment(tenant_id, tenant.company_name)
+    try:
+        payment_url = await create_yukassa_payment(tenant_id, tenant.company_name)
+    except Exception as e:
+        logger.error(f"create_yukassa_payment failed: {e}")
+        payment_url = None
 
     if not payment_url:
+        builder = InlineKeyboardBuilder()
+        builder.row(InlineKeyboardButton(
+            text="?? ?????", callback_data=f"acc:detail:{tenant_id}"
+        ))
         await callback.message.edit_text(
-            f"⚠️ Не удалось создать платёж. Обратитесь в поддержку: {settings.support_username}"
+            f"?? ?? ??????? ??????? ??????.
+"
+            f"?????????? ? ?????????: {settings.support_username}",
+            reply_markup=builder.as_markup(),
+            parse_mode="HTML",
         )
         return
 
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(
-        text=f"💳 Оплатить {settings.subscription_price} руб",
+        text=f"?? ???????? {settings.subscription_price} ???",
         url=payment_url,
     ))
     builder.row(InlineKeyboardButton(
-        text="✅ Я оплатил — проверить",
-        callback_data=f"pay:check:{tenant_id}",
+        text="? ? ??????? ? ?????????",
+        callback_data=f"pay:check:{tenant_id}"
     ))
-    builder.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="main:back"))
+    builder.row(InlineKeyboardButton(
+        text="?? ?????", callback_data=f"acc:detail:{tenant_id}"
+    ))
 
     await callback.message.edit_text(
-        f"💳 <b>Оплата подписки</b>\n\n"
-        f"🏢 {tenant.company_name}\n"
-        f"💰 Сумма: {settings.subscription_price} руб\n"
-        f"📅 Период: {settings.subscription_days} дней\n\n"
-        "После оплаты подписка активируется <b>автоматически</b> в течение 1–2 минут.\n"
-        "Или нажмите «Я оплатил» для ручной проверки.",
+        f"?? <b>?????? ????????</b>
+
+"
+        f"?? {tenant.company_name}
+"
+        f"?? ?????: {settings.subscription_price} ???
+"
+        f"?? ??????: {settings.subscription_days} ????
+
+"
+        "????? ?????? ???????? ???????????? <b>?????????????</b> "
+        "? ??????? 1?2 ?????.
+"
+        "??? ??????? ?? ???????? ??? ?????? ????????.",
         reply_markup=builder.as_markup(),
         parse_mode="HTML",
     )
+
+
+@router.callback_query(F.data.startswith("reg:pay:"))
+async def cb_reg_pay(callback: CallbackQuery):
+    await _process_payment(callback)
+
+
+@router.callback_query(F.data.startswith("acc:pay:"))
+async def cb_acc_pay(callback: CallbackQuery):
+    await _process_payment(callback)
 
 
 @router.callback_query(F.data.startswith("pay:check:"))
