@@ -30,7 +30,7 @@ def main():
     # ── migrate dev — применить все миграции ──────────
     if command == "dev":
         print("⚙️  Применяю миграции...")
-        code = run("alembic upgrade head")
+        code = run("alembic upgrade heads")
         if code == 0:
             print("✅ Готово — база данных актуальна.")
         else:
