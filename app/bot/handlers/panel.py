@@ -198,7 +198,7 @@ async def ensure_panel_message(sender: TelegramSafeSender, chat_id: int, topic_i
 @router.message(Command("panel"))  # FIXED #11
 async def cmd_panel(message: Message, sender: TelegramSafeSender, tenant=None):
     """Восстанавливает пульт управления командой в текущем топике."""  # FIXED #11
-    group_id = _get_group_id(tenant)
+    group_id = _get_group_id(tenant) or (message.chat.id if message.chat.id < 0 else None)
     if not group_id:
         return
     if not await _check_admin(sender, message.from_user.id, group_id):
@@ -238,7 +238,7 @@ async def handle_panel_actions(callback: CallbackQuery, state: FSMContext, sende
         await sender.answer(callback)
         return
 
-    group_id = _get_group_id(tenant)
+    group_id = _get_group_id(tenant) or (message.chat.id if message.chat.id < 0 else None)
     if not group_id:
         await sender.answer(callback)
         return
@@ -307,7 +307,7 @@ async def handle_panel_actions(callback: CallbackQuery, state: FSMContext, sende
 
 @router.message(PanelAddManagerState.waiting_for_contact)
 async def handle_manager_contact(message: Message, state: FSMContext, sender: TelegramSafeSender, tenant=None):
-    group_id = _get_group_id(tenant)
+    group_id = _get_group_id(tenant) or (message.chat.id if message.chat.id < 0 else None)
     if not group_id:
         return
     if not await _check_admin(sender, message.from_user.id, group_id):

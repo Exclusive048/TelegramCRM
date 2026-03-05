@@ -125,7 +125,7 @@ async def handle_lead_action(
         return
     lead_id = int(lead_id_raw)
     source_ref = MessageRef.from_callback(callback)
-    group_id = _get_group_id(tenant)
+    group_id = _get_group_id(tenant) or (message.chat.id if message.chat.id < 0 else None)
     if not group_id and callback.message:
         group_id = callback.message.chat.id
 
@@ -337,7 +337,7 @@ async def handle_amount_input(
     sender: TelegramSafeSender,
     tenant=None,
 ):
-    group_id = _get_group_id(tenant)
+    group_id = _get_group_id(tenant) or (message.chat.id if message.chat.id < 0 else None)
     if not await reject_non_force_reply(message, state, sender):
         return
 
@@ -409,7 +409,7 @@ async def handle_custom_reject(
     sender: TelegramSafeSender,
     tenant=None,
 ):
-    group_id = _get_group_id(tenant)
+    group_id = _get_group_id(tenant) or (message.chat.id if message.chat.id < 0 else None)
     if not await reject_non_force_reply(message, state, sender):
         return
 
@@ -481,7 +481,7 @@ async def handle_note_text(
     sender: TelegramSafeSender,
     tenant=None,
 ):
-    group_id = _get_group_id(tenant)
+    group_id = _get_group_id(tenant) or (message.chat.id if message.chat.id < 0 else None)
 
     if not await reject_non_force_reply(message, state, sender):
         return
@@ -551,7 +551,7 @@ async def handle_custom_reminder_time(
     sender: TelegramSafeSender,
     tenant=None,
 ):
-    group_id = _get_group_id(tenant)
+    group_id = _get_group_id(tenant) or (message.chat.id if message.chat.id < 0 else None)
 
     if not await reject_non_force_reply(message, state, sender):
         return
@@ -631,7 +631,7 @@ async def handle_custom_reminder_time(
 
 @router.message(F.reply_to_message)
 async def handle_reply_note(message: Message, sender: TelegramSafeSender, tenant=None):
-    group_id = _get_group_id(tenant)
+    group_id = _get_group_id(tenant) or (message.chat.id if message.chat.id < 0 else None)
     if not group_id or message.chat.id != group_id:
         return
     if not message.text or message.text.startswith("/"):
@@ -863,7 +863,7 @@ async def handle_create_lead_comment(
     sender: TelegramSafeSender,
     tenant=None,
 ):
-    group_id = _get_group_id(tenant)
+    group_id = _get_group_id(tenant) or (message.chat.id if message.chat.id < 0 else None)
 
     if not await reject_non_force_reply(message, state, sender):
         return
