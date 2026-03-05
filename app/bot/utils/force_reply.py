@@ -71,17 +71,27 @@ async def is_force_reply(message: Message, state: FSMContext) -> bool:
     thread_id = data.get(_PROMPT_THREAD_KEY)
     user_id = data.get(_PROMPT_USER_KEY)
 
+    logger.debug(f"is_force_reply check: prompt_id={prompt_id} chat_id={chat_id} thread_id={thread_id} user_id={user_id}")
+    logger.debug(f"is_force_reply message: chat={message.chat.id} thread={message.message_thread_id} user={message.from_user.id if message.from_user else None} reply_to={message.reply_to_message.message_id if message.reply_to_message else None}")
+
     if not prompt_id or not user_id:
+        logger.debug("is_force_reply FAIL: no prompt_id or user_id")
         return False
     if message.chat.id != chat_id:
+        logger.debug(f"is_force_reply FAIL: chat mismatch {message.chat.id} != {chat_id}")
         return False
     if message.message_thread_id != thread_id:
+        logger.debug(f"is_force_reply FAIL: thread mismatch {message.message_thread_id} != {thread_id}")
         return False
     if message.from_user is None or message.from_user.id != user_id:
+        logger.debug(f"is_force_reply FAIL: user mismatch")
         return False
     if message.reply_to_message is None:
+        logger.debug("is_force_reply FAIL: no reply_to_message")
         return False
-    return message.reply_to_message.message_id == prompt_id
+    result = message.reply_to_message.message_id == prompt_id
+    logger.debug(f"is_force_reply result={result} reply_to={message.reply_to_message.message_id} prompt={prompt_id}")
+    return result
 
 
 async def reject_non_force_reply(message: Message, state: FSMContext, sender: TelegramSafeSender) -> bool:
