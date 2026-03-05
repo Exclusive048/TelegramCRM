@@ -63,7 +63,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository }}
+          images: ghcr.io/exclusive048/telegramcrm
           tags: |
             type=sha,prefix=sha-
             type=raw,value=latest,enable={{is_default_branch}}
@@ -108,7 +108,7 @@ jobs:
               docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
             # Обновить образ
-            export DOCKER_IMAGE=ghcr.io/${{ github.repository }}:latest
+            export DOCKER_IMAGE=ghcr.io/exclusive048/telegramcrm:latest
             docker compose pull app
 
             # Применить миграции БД перед рестартом
