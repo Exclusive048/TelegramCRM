@@ -63,23 +63,13 @@ def _tenant_detail_text(tenant: Tenant) -> str:
 
 def _account_keyboard(tenant: Tenant) -> InlineKeyboardBuilder:
     b = InlineKeyboardBuilder()
-    now = datetime.now(timezone.utc)
 
-    # Кнопка оплаты — скрывать только если подписка активна и > 7 дней
-    show_pay = True
-    if (
-        tenant.is_active
-        and tenant.subscription_until
-        and (tenant.subscription_until - now).days > 7
-    ):
-        show_pay = False
-
-    if show_pay:
-        label = "💳 Продлить подписку" if tenant.is_active else "💳 Оплатить подписку"
-        b.row(InlineKeyboardButton(
-            text=label,
-            callback_data=f"acc:pay:{tenant.id}",
-        ))
+    # Кнопка оплаты — показывать всегда
+    label = "💳 Продлить подписку" if tenant.is_active else "💳 Оплатить подписку"
+    b.row(InlineKeyboardButton(
+        text=label,
+        callback_data=f"acc:pay:{tenant.id}",
+    ))
 
     if tenant.api_key:
         b.row(InlineKeyboardButton(
