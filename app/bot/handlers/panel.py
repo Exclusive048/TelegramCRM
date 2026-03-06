@@ -238,7 +238,7 @@ async def handle_panel_actions(callback: CallbackQuery, state: FSMContext, sende
         await sender.answer(callback)
         return
 
-    group_id = _get_group_id(tenant) or (callback.chat.id if callback.chat.id < 0 else None)
+    group_id = _get_group_id(tenant) or (callback.message.chat.id if callback.message.chat.id < 0 else None)
     if not group_id:
         await sender.answer(callback)
         return

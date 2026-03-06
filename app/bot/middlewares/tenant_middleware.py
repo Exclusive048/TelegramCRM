@@ -35,8 +35,6 @@ class TenantMiddleware(BaseMiddleware):
                 f"from={event.from_user.id if event.from_user else None} "
                 f"chat_id={event.message.chat.id if event.message else None}"
             )
-        else:
-            logger.debug(f"[MW] OTHER EVENT: type={type(event).__name__}")
 
         # ── Исключённые команды — пропускаем без проверки тенанта ─────────────
         EXCLUDED_COMMANDS = {"/start", "/pay", "/help", "/setup"}
@@ -55,7 +53,6 @@ class TenantMiddleware(BaseMiddleware):
 
         # ── Личный чат (chat_id > 0) — пропускаем без проверки тенанта ────────
         if not chat_id or chat_id > 0:
-            logger.debug(f"[MW] private/no chat (chat_id={chat_id}), skip tenant check → pass to handler")
             return await handler(event, data)
 
         # ── Групповой чат — проверяем тенанта ─────────────────────────────────

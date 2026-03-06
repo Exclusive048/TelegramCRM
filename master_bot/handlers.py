@@ -122,6 +122,7 @@ async def cmd_start(message: Message, state: FSMContext, command: CommandObject)
 
 
 # ── Ввод названия компании ─────────────────────────────────────────────────────
+
 @router.message(RegState.waiting_for_name)
 async def handle_company_name(message: Message, state: FSMContext):
     logger.debug(f"[MASTER] handle_company_name CALLED from={message.from_user.id} text={message.text!r}")
