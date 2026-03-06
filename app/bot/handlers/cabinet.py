@@ -99,12 +99,12 @@ async def cmd_cabinet(message: Message, sender: TelegramSafeSender, tenant=None)
         )
         return
 
-    await sender.send_ephemeral_text(
+    await sender.send_text(
         chat_id=message.chat.id,
         message_thread_id=message.message_thread_id,
-        text="Кабинет\n\nВыберите раздел:",
+        text="🗂 <b>Кабинет</b>\n\nВыберите раздел:",
         reply_markup=_main_keyboard().as_markup(),
-        ttl_sec=TTL_MENU_SEC,
+        parse_mode="HTML",
     )
     try:
         await sender.delete_message(
@@ -118,7 +118,7 @@ async def cmd_cabinet(message: Message, sender: TelegramSafeSender, tenant=None)
 
 @router.callback_query(F.data == "cab:back")
 async def cab_back(callback: CallbackQuery, sender: TelegramSafeSender, tenant=None):
-    group_id = _get_group_id(tenant) or (callback.chat.id if callback.chat.id < 0 else None)
+    group_id = _get_group_id(tenant) or (callback.message.chat.id if callback.message.chat.id < 0 else None)
     if not group_id:
         await sender.answer(callback)
         return
@@ -129,15 +129,10 @@ async def cab_back(callback: CallbackQuery, sender: TelegramSafeSender, tenant=N
     await sender.edit_text(
         chat_id=callback.message.chat.id,
         message_id=callback.message.message_id,
-        text="Кабинет\n\nВыберите раздел:",
+        text="🗂 <b>Кабинет</b>\n\nВыберите раздел:",
         reply_markup=_main_keyboard().as_markup(),
+        parse_mode="HTML",
         thread_id=callback.message.message_thread_id,
-    )
-    await sender.schedule_delete(
-        chat_id=callback.message.chat.id,
-        message_id=callback.message.message_id,
-        thread_id=callback.message.message_thread_id,
-        ttl_sec=TTL_MENU_SEC,
     )
 
 
@@ -146,7 +141,7 @@ async def cab_back(callback: CallbackQuery, sender: TelegramSafeSender, tenant=N
 
 @router.callback_query(F.data == "cab:export")
 async def cab_export_menu(callback: CallbackQuery, sender: TelegramSafeSender, tenant=None):
-    group_id = _get_group_id(tenant) or (callback.chat.id if callback.chat.id < 0 else None)
+    group_id = _get_group_id(tenant) or (callback.message.chat.id if callback.message.chat.id < 0 else None)
     if not group_id:
         await sender.answer(callback)
         return
@@ -161,17 +156,11 @@ async def cab_export_menu(callback: CallbackQuery, sender: TelegramSafeSender, t
         reply_markup=_stage_keyboard("cab:export_stage").as_markup(),
         thread_id=callback.message.message_thread_id,
     )
-    await sender.schedule_delete(
-        chat_id=callback.message.chat.id,
-        message_id=callback.message.message_id,
-        thread_id=callback.message.message_thread_id,
-        ttl_sec=TTL_MENU_SEC,
-    )
 
 
 @router.callback_query(F.data.startswith("cab:export_stage:"))
 async def cab_export_period(callback: CallbackQuery, sender: TelegramSafeSender, tenant=None):
-    group_id = _get_group_id(tenant) or (callback.chat.id if callback.chat.id < 0 else None)
+    group_id = _get_group_id(tenant) or (callback.message.chat.id if callback.message.chat.id < 0 else None)
     if not group_id:
         await sender.answer(callback)
         return
@@ -198,7 +187,7 @@ async def cab_export_period(callback: CallbackQuery, sender: TelegramSafeSender,
 
 @router.callback_query(F.data.startswith("cab:export_do:"))
 async def cab_export_do(callback: CallbackQuery, sender: TelegramSafeSender, tenant=None):
-    group_id = _get_group_id(tenant) or (callback.chat.id if callback.chat.id < 0 else None)
+    group_id = _get_group_id(tenant) or (callback.message.chat.id if callback.message.chat.id < 0 else None)
     if not group_id:
         await sender.answer(callback)
         return
@@ -297,7 +286,7 @@ async def cab_export_do(callback: CallbackQuery, sender: TelegramSafeSender, ten
 
 @router.callback_query(F.data == "cab:analytics")
 async def cab_analytics(callback: CallbackQuery, sender: TelegramSafeSender, tenant=None):
-    group_id = _get_group_id(tenant) or (callback.chat.id if callback.chat.id < 0 else None)
+    group_id = _get_group_id(tenant) or (callback.message.chat.id if callback.message.chat.id < 0 else None)
     if not group_id:
         await sender.answer(callback)
         return
@@ -329,7 +318,7 @@ async def cab_analytics(callback: CallbackQuery, sender: TelegramSafeSender, ten
 
 @router.callback_query(F.data.startswith("cab:analytics:conversion"))
 async def cab_analytics_conversion(callback: CallbackQuery, sender: TelegramSafeSender, tenant=None):
-    group_id = _get_group_id(tenant) or (callback.chat.id if callback.chat.id < 0 else None)
+    group_id = _get_group_id(tenant) or (callback.message.chat.id if callback.message.chat.id < 0 else None)
     if not group_id:
         await sender.answer(callback)
         return
@@ -355,7 +344,7 @@ async def cab_analytics_conversion(callback: CallbackQuery, sender: TelegramSafe
 
 @router.callback_query(F.data.startswith("cab:analytics_conversion:"))
 async def cab_analytics_conversion_period(callback: CallbackQuery, sender: TelegramSafeSender, tenant=None):
-    group_id = _get_group_id(tenant) or (callback.chat.id if callback.chat.id < 0 else None)
+    group_id = _get_group_id(tenant) or (callback.message.chat.id if callback.message.chat.id < 0 else None)
     if not group_id:
         await sender.answer(callback)
         return
@@ -401,7 +390,7 @@ async def cab_analytics_conversion_period(callback: CallbackQuery, sender: Teleg
 
 @router.callback_query(F.data.startswith("cab:analytics:activity"))
 async def cab_analytics_activity(callback: CallbackQuery, sender: TelegramSafeSender, tenant=None):
-    group_id = _get_group_id(tenant) or (callback.chat.id if callback.chat.id < 0 else None)
+    group_id = _get_group_id(tenant) or (callback.message.chat.id if callback.message.chat.id < 0 else None)
     if not group_id:
         await sender.answer(callback)
         return
@@ -427,7 +416,7 @@ async def cab_analytics_activity(callback: CallbackQuery, sender: TelegramSafeSe
 
 @router.callback_query(F.data.startswith("cab:analytics_activity:"))
 async def cab_analytics_activity_period(callback: CallbackQuery, sender: TelegramSafeSender, tenant=None):
-    group_id = _get_group_id(tenant) or (callback.chat.id if callback.chat.id < 0 else None)
+    group_id = _get_group_id(tenant) or (callback.message.chat.id if callback.message.chat.id < 0 else None)
     if not group_id:
         await sender.answer(callback)
         return
@@ -463,7 +452,7 @@ async def cab_analytics_activity_period(callback: CallbackQuery, sender: Telegra
 
 @router.callback_query(F.data.startswith("cab:analytics_activity_run:"))
 async def cab_analytics_activity_run(callback: CallbackQuery, sender: TelegramSafeSender, tenant=None):
-    group_id = _get_group_id(tenant) or (callback.chat.id if callback.chat.id < 0 else None)
+    group_id = _get_group_id(tenant) or (callback.message.chat.id if callback.message.chat.id < 0 else None)
     if not group_id:
         await sender.answer(callback)
         return
@@ -473,10 +462,7 @@ async def cab_analytics_activity_run(callback: CallbackQuery, sender: TelegramSa
     await sender.answer(callback)
     _, _, period, manager_raw = callback.data.split(":")
     date_from, date_to = _period_dates(period)
-    try:
-        manager_id = int(manager_raw)
-    except ValueError:
-        return await sender.answer(callback)
+    manager_id = None if manager_raw == "all" else (int(manager_raw) if manager_raw.isdigit() else None)
 
     async with AsyncSessionLocal() as session:
         repo = LeadRepository(session)
@@ -521,7 +507,7 @@ def _pct(part: int, total: int) -> str:
 
 @router.callback_query(F.data == "cab:integrations")
 async def cab_integrations(callback: CallbackQuery, sender: TelegramSafeSender, tenant=None):
-    group_id = _get_group_id(tenant) or (callback.chat.id if callback.chat.id < 0 else None)
+    group_id = _get_group_id(tenant) or (callback.message.chat.id if callback.message.chat.id < 0 else None)
     if not group_id:
         await sender.answer(callback)
         return
@@ -580,7 +566,7 @@ async def cab_integrations(callback: CallbackQuery, sender: TelegramSafeSender, 
 
 @router.callback_query(F.data == "cab:copy_webhook")
 async def cab_copy_webhook(callback: CallbackQuery, sender: TelegramSafeSender, tenant=None):
-    group_id = _get_group_id(tenant) or (callback.chat.id if callback.chat.id < 0 else None)
+    group_id = _get_group_id(tenant) or (callback.message.chat.id if callback.message.chat.id < 0 else None)
     if not group_id:
         await sender.answer(callback)
         return
@@ -604,7 +590,7 @@ async def cab_copy_webhook(callback: CallbackQuery, sender: TelegramSafeSender, 
 
 @router.callback_query(F.data == "cab:tariff")
 async def cab_tariff(callback: CallbackQuery, sender: TelegramSafeSender, tenant=None):
-    group_id = _get_group_id(tenant) or (callback.chat.id if callback.chat.id < 0 else None)
+    group_id = _get_group_id(tenant) or (callback.message.chat.id if callback.message.chat.id < 0 else None)
     if not group_id:
         await sender.answer(callback)
         return
