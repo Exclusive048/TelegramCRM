@@ -42,7 +42,8 @@ async def main() -> None:
     dp = Dispatcher(storage=storage)
     dp["sender"] = sender
     dp.update.middleware(SenderMiddleware())
-    dp.update.outer_middleware(TenantMiddleware())
+    dp.message.outer_middleware(TenantMiddleware())
+    dp.callback_query.outer_middleware(TenantMiddleware())
     dp.include_router(build_crm_router())
 
     if settings.master_bot_token:
