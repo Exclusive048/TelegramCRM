@@ -269,7 +269,7 @@ async def handle_panel_actions(callback: CallbackQuery, state: FSMContext, sende
             text = render_panel_home()
             keyboard = build_kb_panel_home()
         elif action == "panel_team":
-            managers = await repo.get_all_managers(include_inactive=True, tenant_id=tenant.id if tenant else None)
+            managers = await repo.get_all_managers(include_inactive=True)
             text = render_panel_team(managers)
             keyboard = build_kb_panel_team(managers)
         elif action == "team_add":
@@ -282,7 +282,7 @@ async def handle_panel_actions(callback: CallbackQuery, state: FSMContext, sende
             text = render_panel_team_add_prompt()
             keyboard = build_kb_panel_team_add_prompt()
         elif action == "team_cancel":
-            managers = await repo.get_all_managers(include_inactive=True, tenant_id=tenant.id if tenant else None)
+            managers = await repo.get_all_managers(include_inactive=True)
             text = render_panel_team(managers)
             keyboard = build_kb_panel_team(managers)
         else:
@@ -331,10 +331,41 @@ async def handle_manager_contact(message: Message, state: FSMContext, sender: Te
             if not panel_topic_id:
                 return
 
-        if not message.contact or not message.contact.user_id:
+        # Принимаем контакт ИЛИ пересланное сообщение
+        tg_id = None
+        name = None
+        username = None
+
+        if message.contact and message.contact.user_id:
+            # Вариант 1: кнопка "Поделиться контактом"
+            tg_id = message.contact.user_id
+            name = " ".join(filter(None, [message.contact.first_name, message.contact.last_name])) or "—"
+            try:
+                chat = await sender.get_chat(tg_id)
+                if chat.full_name:
+                    name = chat.full_name
+                username = chat.username
+            except Exception as e:
+                logger.warning(f"Could not fetch chat info for {tg_id}: {e}")
+
+        elif message.forward_origin:
+            # Вариант 2: пересланное сообщение от пользователя
+            origin = message.forward_origin
+            if hasattr(origin, "sender_user") and origin.sender_user:
+                user = origin.sender_user
+                tg_id = user.id
+                name = " ".join(filter(None, [user.first_name, user.last_name])) or "—"
+                username = user.username
+            elif hasattr(origin, "sender_user_name"):
+                # Скрытый пользователь — нет tg_id
+                pass
+
+        if not tg_id:
             text = (
-                "⚠️ <b>Нужен контакт пользователя Telegram</b>\n\n"
-                "Пришлите контакт менеджера через кнопку «Поделиться контактом»."
+                "⚠️ <b>Как добавить менеджера:</b>\n\n"
+                "1️⃣ Перешлите любое сообщение от менеджера\n"
+                "2️⃣ Или поделитесь его контактом\n\n"
+                "Менеджер должен разрешить пересылку сообщений."
             )
             keyboard = build_kb_panel_team_add_prompt()
             if panel_message_id:
@@ -358,19 +389,8 @@ async def handle_manager_contact(message: Message, state: FSMContext, sender: Te
                 pass
             return
 
-        contact = message.contact
-        name = " ".join(filter(None, [contact.first_name, contact.last_name])) or "—"
-        username = None
-        try:
-            chat = await sender.get_chat(contact.user_id)
-            if chat.full_name:
-                name = chat.full_name
-            username = chat.username
-        except Exception as e:
-            logger.warning(f"Could not fetch chat info for {contact.user_id}: {e}")
-
         manager = await repo.upsert_manager_from_contact(
-            tg_id=contact.user_id,
+            tg_id=tg_id,
             name=name,
             username=username,
             tenant_id=tenant.id if tenant else None,
@@ -378,7 +398,7 @@ async def handle_manager_contact(message: Message, state: FSMContext, sender: Te
         await session.commit()
         logger.info(f"Manager upserted from contact: {manager.name} (tg_id={manager.tg_id})")
 
-        managers = await repo.get_all_managers(include_inactive=True, tenant_id=tenant.id if tenant else None)
+        managers = await repo.get_all_managers(include_inactive=True)
         text = render_panel_team(managers)
         keyboard = build_kb_panel_team(managers)
 
