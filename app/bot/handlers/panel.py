@@ -269,7 +269,7 @@ async def handle_panel_actions(callback: CallbackQuery, state: FSMContext, sende
             text = render_panel_home()
             keyboard = build_kb_panel_home()
         elif action == "panel_team":
-            managers = await repo.get_all_managers(include_inactive=True)
+            managers = await repo.get_all_managers(include_inactive=True, tenant_id=tenant.id if tenant else None)
             text = render_panel_team(managers)
             keyboard = build_kb_panel_team(managers)
         elif action == "team_add":
@@ -282,7 +282,7 @@ async def handle_panel_actions(callback: CallbackQuery, state: FSMContext, sende
             text = render_panel_team_add_prompt()
             keyboard = build_kb_panel_team_add_prompt()
         elif action == "team_cancel":
-            managers = await repo.get_all_managers(include_inactive=True)
+            managers = await repo.get_all_managers(include_inactive=True, tenant_id=tenant.id if tenant else None)
             text = render_panel_team(managers)
             keyboard = build_kb_panel_team(managers)
         else:
@@ -378,7 +378,7 @@ async def handle_manager_contact(message: Message, state: FSMContext, sender: Te
         await session.commit()
         logger.info(f"Manager upserted from contact: {manager.name} (tg_id={manager.tg_id})")
 
-        managers = await repo.get_all_managers(include_inactive=True)
+        managers = await repo.get_all_managers(include_inactive=True, tenant_id=tenant.id if tenant else None)
         text = render_panel_team(managers)
         keyboard = build_kb_panel_team(managers)
 

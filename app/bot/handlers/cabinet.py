@@ -427,7 +427,7 @@ async def cab_analytics_activity_period(callback: CallbackQuery, sender: Telegra
     period = callback.data.split(":")[2]
     async with AsyncSessionLocal() as session:
         repo = LeadRepository(session)
-        managers = await repo.get_all_managers()
+        managers = await repo.get_all_managers(tenant_id=tenant.id if tenant else None)
 
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text="All", callback_data=f"cab:analytics_activity_run:{period}:all"))

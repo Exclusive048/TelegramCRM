@@ -489,10 +489,12 @@ class LeadRepository:
         )
         return result.scalar_one_or_none()
 
-    async def get_all_managers(self, include_inactive: bool = False) -> list[Manager]:
+    async def get_all_managers(self, include_inactive: bool = False, tenant_id: int | None = None) -> list[Manager]:
         query = select(Manager)
         if not include_inactive:
             query = query.where(Manager.is_active == True)
+        if tenant_id is not None:
+            query = query.where(Manager.tenant_id == tenant_id)
         result = await self.session.execute(query)
         return result.scalars().all()
 
