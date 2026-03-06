@@ -4,7 +4,7 @@
 """
 from datetime import datetime, timedelta
 import io  # FIXED #13
-
+from loguru import logger
 import openpyxl  # FIXED #13
 from openpyxl.styles import Font, PatternFill, Alignment  # FIXED #13
 
@@ -87,6 +87,7 @@ def _period_dates(period: str) -> tuple[datetime, datetime]:
 
 @router.message(Command("cabinet"))
 async def cmd_cabinet(message: Message, sender: TelegramSafeSender, tenant=None):
+    logger.info(f"cmd_cabinet: group_id={_get_group_id(tenant)} tenant={tenant} user={message.from_user.id}")
     group_id = _get_group_id(tenant) or (message.chat.id if message.chat.id < 0 else None)
     if not group_id:
         return
