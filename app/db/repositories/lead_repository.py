@@ -16,6 +16,16 @@ from app.db.models.lead import (
 from app.db.models.tenant import Tenant
 
 
+
+def _naive(dt: "datetime | None") -> "datetime | None":
+    """Убирает timezone info для совместимости с TIMESTAMP WITHOUT TIME ZONE."""
+    if dt is None:
+        return None
+    if dt.tzinfo is not None:
+        return dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
+
+
 class LeadRepository:
     def __init__(self, session: AsyncSession):
         self.session = session
@@ -59,6 +69,7 @@ class LeadRepository:
             query = query.where(Lead.source == source)
         if manager_id:
             query = query.where(Lead.manager_id == manager_id)
+        date_from, date_to = _naive(date_from), _naive(date_to)
         if date_from:
             query = query.where(Lead.created_at >= date_from)
         if date_to:
@@ -568,6 +579,7 @@ class LeadRepository:
         date_from: datetime | None = None,
         date_to: datetime | None = None,
     ) -> int:
+        date_from, date_to = _naive(date_from), _naive(date_to)
         query = select(func.count()).select_from(Lead).where(Lead.status == status)
         if date_from:
             query = query.where(Lead.created_at >= date_from)
@@ -581,6 +593,7 @@ class LeadRepository:
         date_from: datetime | None = None,
         date_to: datetime | None = None,
     ) -> dict:
+        date_from, date_to = _naive(date_from), _naive(date_to)
         query = select(Lead.status, func.count()).select_from(Lead)
         if date_from:
             query = query.where(Lead.created_at >= date_from)
@@ -607,6 +620,7 @@ class LeadRepository:
         date_to: datetime | None = None,
         manager_id: int | None = None,
     ) -> dict:
+        date_from, date_to = _naive(date_from), _naive(date_to)
         history_query = select(LeadHistory.lead_id)
         if date_from:
             history_query = history_query.where(LeadHistory.created_at >= date_from)
@@ -643,4 +657,3 @@ class LeadRepository:
             "total": total,
             "by_status": by_status,
         }
-
