@@ -629,7 +629,7 @@ async def handle_custom_reminder_time(
     await state.clear()
 
 
-@router.message(F.reply_to_message)
+@router.message(F.reply_to_message, ~F.text.startswith("/"))
 async def handle_reply_note(message: Message, sender: TelegramSafeSender, tenant=None):
     group_id = _get_group_id(tenant) or (message.chat.id if message.chat.id < 0 else None)
     if not group_id or message.chat.id != group_id:
