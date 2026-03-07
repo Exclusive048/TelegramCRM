@@ -3,7 +3,9 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from aiogram import F, Router
+from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import default_state
 from aiogram.types import CallbackQuery, Message
 
 from app.bot.constants.ttl import TTL_ERROR_SEC, TTL_MENU_SEC
@@ -294,7 +296,7 @@ async def handle_custom_reminder_time(
     await state.clear()
 
 
-@router.message(F.reply_to_message, ~F.text.startswith("/"))
+@router.message(F.reply_to_message, ~F.text.startswith("/"), StateFilter(default_state))
 async def handle_reply_note(message: Message, sender: TelegramSafeSender, tenant=None):
     group_id = _get_group_id(tenant) or (message.chat.id if message.chat.id < 0 else None)
     if not group_id or message.chat.id != group_id:
@@ -370,4 +372,3 @@ async def handle_reply_note(message: Message, sender: TelegramSafeSender, tenant
             )
         except Exception:
             pass
-
