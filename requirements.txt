@@ -23,3 +23,4 @@ httpx>=0.27.0            # async HTTP client
 redis>=5.0.0             # кэш и очереди
 loguru>=0.7.0            # логирование
 apscheduler>=3.10.4      # reminders scheduler (replaces celery) # FIXED #9
+slowapi==0.1.9

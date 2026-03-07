@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.db.models.tenant import Tenant, Payment
+from app.db.utils import _naive
 
 
 def _generate_referral_code() -> str:
@@ -82,7 +83,7 @@ class TenantRepository:
             await self.session.execute(
                 update(Tenant).where(Tenant.id == tenant_id).values(
                     leads_this_month=1,
-                    leads_month_reset_at=now,
+                    leads_month_reset_at=_naive(now),
                 )
             )
         else:
@@ -174,8 +175,8 @@ class TenantRepository:
             update(Tenant).where(Tenant.id == tenant_id).values(
                 is_active=True,
                 trial_used=True,
-                trial_until=until,
-                subscription_until=until,
+                trial_until=_naive(until),
+                subscription_until=_naive(until),
                 plan="trial",
             )
         )
@@ -199,7 +200,7 @@ class TenantRepository:
         await self.session.execute(
             update(Tenant).where(Tenant.id == tenant_id).values(
                 is_active=True,
-                subscription_until=new_until,
+                subscription_until=_naive(new_until),
                 plan="base",
             )
         )
@@ -222,7 +223,7 @@ class TenantRepository:
                 referrer_base = max(referrer.subscription_until or now, now)
                 await self.session.execute(
                     update(Tenant).where(Tenant.id == referrer.id).values(
-                        subscription_until=referrer_base + timedelta(days=bonus_days)
+                        subscription_until=_naive(referrer_base + timedelta(days=bonus_days))
                     )
                 )
                 await self.session.execute(
@@ -295,10 +296,17 @@ class TenantRepository:
         return result.scalar_one_or_none()
 
     async def mark_payment_succeeded(self, yukassa_id: str) -> Payment | None:
-        payment = await self.get_payment_by_yukassa_id(yukassa_id)
-        if not payment:
+        updated_id = (
+            await self.session.execute(
+                update(Payment)
+                .where(Payment.yukassa_id == yukassa_id, Payment.status == "pending")
+                .values(status="succeeded")
+                .returning(Payment.id)
+            )
+        ).scalar_one_or_none()
+        if updated_id is None:
             return None
-        await self.session.execute(
-            update(Payment).where(Payment.id == payment.id).values(status="succeeded")
+        result = await self.session.execute(
+            select(Payment).where(Payment.id == updated_id)
         )
-        return payment
+        return result.scalar_one_or_none()

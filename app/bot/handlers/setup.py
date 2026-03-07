@@ -72,7 +72,7 @@ async def _ensure_owner_registered(user_id: int, full_name: str, username: str |
 async def cmd_start(message: Message, state: FSMContext, sender: TelegramSafeSender):
     """Регистрация нового тенанта или приветствие существующего."""
     if message.chat.type == "private":
-        await message.answer("Добавьте бота в вашу Telegram-группу как администратора.")
+        await message.answer("ℹ️ Добавьте бота в вашу Telegram-группу как администратора.")
         return
 
     async with AsyncSessionLocal() as session:
@@ -186,7 +186,7 @@ async def cb_reg_trial(callback: CallbackQuery, sender: TelegramSafeSender):
         repo = TenantRepository(session)
         tenant = await repo.get_by_id(tenant_id)
         if not tenant or tenant.trial_used:
-            await callback.answer("Пробный период уже был использован.", show_alert=True)
+            await callback.answer("⚠️ Пробный период уже использован.", show_alert=True)
             return
         await repo.activate_trial(tenant_id, days=settings.trial_days)
         await session.commit()
@@ -291,7 +291,7 @@ async def cmd_setup(message: Message, sender: TelegramSafeSender):
         await sender.send_ephemeral_text(
             chat_id=chat_id,
             message_thread_id=message.message_thread_id,
-            text="⛔️ Включите в группе темы (Forum), чтобы настроить CRM.",
+            text="⛔️ Включите в группе темы (форум), чтобы настроить CRM.",
             ttl_sec=TTL_ERROR_SEC,
         )
         return
@@ -663,13 +663,13 @@ async def cmd_managers(message: Message, sender: TelegramSafeSender, tenant=None
 
     async with AsyncSessionLocal() as session:
         repo = LeadRepository(session)
-        managers = await repo.get_all_managers()
+        managers = await repo.get_all_managers(tenant_id=tenant.id if tenant else None)
 
     if not managers:
         await sender.send_ephemeral_text(
             chat_id=message.chat.id,
             message_thread_id=message.message_thread_id,
-            text="👥 Менеджеров пока нет.\nДобавь через /add_manager (ответом на сообщение).",
+            text="ℹ️ Менеджеров пока нет.\nДобавьте через /add_manager (ответом на сообщение).",
             ttl_sec=TTL_MENU_SEC,
         )
         return

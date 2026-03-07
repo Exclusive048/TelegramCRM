@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from aiogram import F, Router
-from aiogram.filters import Command, CommandObject, CommandStart
+from aiogram.filters import CommandObject, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, Message
@@ -30,7 +30,7 @@ def _status_line(tenant: Tenant) -> str:
     until = ""
     if tenant.subscription_until:
         until = f" до {tenant.subscription_until.strftime('%d.%m.%Y')}"
-    plan_map = {"trial": "Пробный", "base": "Базовый", "pro": "Pro"}
+    plan_map = {"trial": "Пробный", "base": "Базовый", "pro": "Про"}
     plan = plan_map.get(tenant.plan, tenant.plan or "—")
     return f"{icon} <b>{tenant.company_name}</b> — {plan}{until}"
 
@@ -47,7 +47,7 @@ def _tenant_detail_text(tenant: Tenant) -> str:
     plan_map = {
         "trial": "Пробный",
         "base": "Базовый 990 руб/мес",
-        "pro": "Pro 2490 руб/мес",
+        "pro": "Про 2490 руб/мес",
     }
     plan = plan_map.get(tenant.plan, tenant.plan or "—")
     onboarding = "✅ Настроена" if tenant.onboarding_completed else "⚠️ Ожидает /setup"
@@ -128,10 +128,10 @@ async def handle_company_name(message: Message, state: FSMContext):
     logger.debug(f"[MASTER] handle_company_name CALLED from={message.from_user.id} text={message.text!r}")
     name = (message.text or "").strip()
     if len(name) < 2:
-        await message.answer("Название слишком короткое. Минимум 2 символа:")
+        await message.answer("⚠️ Название слишком короткое. Минимум 2 символа.")
         return
     if len(name) > 100:
-        await message.answer("Слишком длинное. Максимум 100 символов:")
+        await message.answer("⚠️ Слишком длинное название. Максимум 100 символов.")
         return
 
     data = await state.get_data()
@@ -222,7 +222,7 @@ async def cb_main_new(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     await state.set_state(RegState.waiting_for_name)
     # answer() а не edit_text() — иначе FSM не подхватит следующее сообщение
-    await callback.message.answer("Введите название нового аккаунта CRM:")
+    await callback.message.answer("ℹ️ Введите название нового аккаунта CRM.")
 
 
 # ── Карточка аккаунта ──────────────────────────────────────────────────────────
@@ -234,7 +234,7 @@ async def cb_acc_detail(callback: CallbackQuery):
         repo = TenantRepository(session)
         tenant = await repo.get_by_id(tenant_id)
     if not tenant or tenant.owner_tg_id != callback.from_user.id:
-        await callback.answer("Не найдено", show_alert=True)
+        await callback.answer("⛔️ Не найдено.", show_alert=True)
         return
     await callback.answer()
     await callback.message.edit_text(
@@ -253,10 +253,10 @@ async def cb_reg_trial(callback: CallbackQuery):
         repo = TenantRepository(session)
         tenant = await repo.get_by_id(tenant_id)
         if not tenant or tenant.owner_tg_id != callback.from_user.id:
-            await callback.answer("Ошибка доступа", show_alert=True)
+            await callback.answer("⛔️ Нет доступа.", show_alert=True)
             return
         if tenant.trial_used:
-            await callback.answer("Пробный период уже использован.", show_alert=True)
+            await callback.answer("⚠️ Пробный период уже использован.", show_alert=True)
             return
         api_key = await repo.activate_trial(tenant_id, days=settings.trial_days)
         await session.commit()
@@ -280,7 +280,7 @@ async def _process_payment(callback: CallbackQuery) -> None:
         tenant = await repo.get_by_id(tenant_id)
 
     if not tenant or tenant.owner_tg_id != callback.from_user.id:
-        await callback.answer("Ошибка доступа", show_alert=True)
+        await callback.answer("⛔️ Нет доступа.", show_alert=True)
         return
 
     await callback.answer()
@@ -383,7 +383,7 @@ async def cb_acc_keys(callback: CallbackQuery):
         repo = TenantRepository(session)
         tenant = await repo.get_by_id(tenant_id)
     if not tenant or tenant.owner_tg_id != callback.from_user.id:
-        await callback.answer("Не найдено", show_alert=True)
+        await callback.answer("⛔️ Не найдено.", show_alert=True)
         return
     await callback.answer()
 
@@ -418,7 +418,7 @@ async def cb_acc_ref(callback: CallbackQuery):
         repo = TenantRepository(session)
         tenant = await repo.get_by_id(tenant_id)
         if not tenant or tenant.owner_tg_id != callback.from_user.id:
-            await callback.answer("Не найдено", show_alert=True)
+            await callback.answer("⛔️ Не найдено.", show_alert=True)
             return
         stats = await repo.get_referral_stats(tenant_id)
 

@@ -110,11 +110,27 @@ class ReminderService:
         async with AsyncSessionLocal() as session:
             repo = LeadRepository(session)
             now = datetime.now(timezone.utc)
-            reminders = await repo.get_pending_reminders()
-            for reminder in reminders:
+            due_reminders = await repo.get_pending_reminders(due_before_now=True)
+            for reminder in due_reminders:
+                group_id = await repo.get_group_id_for_lead(reminder.lead_id)
+                _schedule_job(
+                    reminder.id,
+                    reminder.remind_at,
+                    sender,
+                    group_id=group_id,
+                    now=now,
+                    immediate=True,
+                )
+            future_reminders = await repo.get_pending_reminders()
+            for reminder in future_reminders:
                 group_id = await repo.get_group_id_for_lead(reminder.lead_id)
                 _schedule_job(reminder.id, reminder.remind_at, sender, group_id=group_id, now=now)
-            logger.info(f"reminder_scheduler_loaded count={len(reminders)}")
+            logger.info(
+                "reminder_scheduler_loaded overdue_count={} future_count={} total={}",
+                len(due_reminders),
+                len(future_reminders),
+                len(due_reminders) + len(future_reminders),
+            )
 
     async def schedule_reminder(
         self,
@@ -144,6 +160,7 @@ def _schedule_job(
     *,
     group_id: int | None,
     now: datetime | None = None,
+    immediate: bool = False,
 ):
     def _ensure_aware(dt: datetime) -> datetime:
         if dt.tzinfo is None:
@@ -152,7 +169,10 @@ def _schedule_job(
 
     remind_at = _ensure_aware(remind_at)
     now = _ensure_aware(now or datetime.now(timezone.utc))
-    run_at = remind_at if remind_at > now else now + timedelta(seconds=1)
+    if immediate:
+        run_at = now
+    else:
+        run_at = remind_at if remind_at > now else now + timedelta(seconds=1)
     job_id = f"reminder:{reminder_id}"
     trigger = DateTrigger(run_date=run_at)
     _scheduler.add_job(

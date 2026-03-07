@@ -65,7 +65,13 @@ async def is_any_manager(repo: LeadRepository, tg_id: int) -> bool:
     return m is not None and m.is_active
 
 
-async def is_crm_admin(sender: TelegramSafeSender, repo: LeadRepository, chat_id: int, tg_id: int) -> bool:
+async def is_crm_admin(
+    sender: TelegramSafeSender,
+    repo: LeadRepository,
+    chat_id: int,
+    tg_id: int,
+    tenant_id: int | None = None,
+) -> bool:
     """
     CRM-админ = TG-админ группы И запись в managers с role=admin.
     Владелец группы всегда считается CRM-админом если он в managers.
@@ -74,5 +80,7 @@ async def is_crm_admin(sender: TelegramSafeSender, repo: LeadRepository, chat_id
         return False
     m = await get_manager(repo, tg_id)
     if m is None or not m.is_active:
+        return False
+    if tenant_id is not None and m.tenant_id != tenant_id:
         return False
     return m.role == ManagerRole.ADMIN

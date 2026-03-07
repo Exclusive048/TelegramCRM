@@ -14,16 +14,9 @@ from app.db.models.lead import (
     Reminder,
 )
 from app.db.models.tenant import Tenant
+from app.db.utils import _naive
 
 
-
-def _naive(dt: "datetime | None") -> "datetime | None":
-    """Убирает timezone info для совместимости с TIMESTAMP WITHOUT TIME ZONE."""
-    if dt is None:
-        return None
-    if dt.tzinfo is not None:
-        return dt.astimezone(timezone.utc).replace(tzinfo=None)
-    return dt
 
 
 class LeadRepository:
@@ -43,12 +36,15 @@ class LeadRepository:
 
     # ── Получение ─────────────────────────────────────
 
-    async def get_by_id(self, lead_id: int) -> Lead | None:
-        result = await self.session.execute(
+    async def get_by_id(self, lead_id: int, tenant_id: int | None = None) -> Lead | None:
+        query = (
             select(Lead)
             .options(selectinload(Lead.manager), selectinload(Lead.history), selectinload(Lead.comments))
             .where(Lead.id == lead_id)
         )
+        if tenant_id is not None:
+            query = query.where(Lead.tenant_id == tenant_id)
+        result = await self.session.execute(query)
         return result.scalar_one_or_none()
 
     async def get_list(
@@ -61,8 +57,11 @@ class LeadRepository:
         search: str | None = None,
         page: int = 1,
         per_page: int = 50,
+        tenant_id: int | None = None,
     ) -> tuple[list[Lead], int]:
         query = select(Lead).options(selectinload(Lead.manager))
+        if tenant_id is not None:
+            query = query.where(Lead.tenant_id == tenant_id)
         if status:
             query = query.where(Lead.status == status)
         if source:
@@ -93,8 +92,9 @@ class LeadRepository:
         manager_id: int | None = None,
         comment: str | None = None,
         reject_reason: str | None = None,
+        tenant_id: int | None = None,
     ) -> Lead | None:
-        lead = await self.get_by_id(lead_id)
+        lead = await self.get_by_id(lead_id, tenant_id=tenant_id)
         if not lead:
             return None
         old_status = lead.status
@@ -104,7 +104,7 @@ class LeadRepository:
         if reject_reason:
             lead.reject_reason = reject_reason
         if new_status in (LeadStatus.SUCCESS, LeadStatus.REJECTED):
-            lead.closed_at = datetime.now(timezone.utc)
+            lead.closed_at = _naive(datetime.now(timezone.utc))
 
         self.session.add(LeadHistory(
             lead_id=lead_id,
@@ -260,13 +260,19 @@ class LeadRepository:
 
     # ── Lead card messages ───────────────────────────────────────────────────
 
-    async def get_card_message(self, chat_id: int, message_id: int) -> LeadCardMessage | None:
-        result = await self.session.execute(
-            select(LeadCardMessage).where(
-                LeadCardMessage.chat_id == chat_id,
-                LeadCardMessage.message_id == message_id,
-            )
+    async def get_card_message(
+        self,
+        chat_id: int,
+        message_id: int,
+        tenant_id: int | None = None,
+    ) -> LeadCardMessage | None:
+        query = select(LeadCardMessage).where(
+            LeadCardMessage.chat_id == chat_id,
+            LeadCardMessage.message_id == message_id,
         )
+        if tenant_id is not None:
+            query = query.join(Lead, Lead.id == LeadCardMessage.lead_id).where(Lead.tenant_id == tenant_id)
+        result = await self.session.execute(query)
         return result.scalar_one_or_none()
 
     async def get_active_card_message(self, lead_id: int) -> LeadCardMessage | None:
@@ -416,7 +422,17 @@ class LeadRepository:
 
     # ── Комментарии ───────────────────────────────────
 
-    async def add_comment(self, lead_id: int, text: str, author: str) -> LeadComment:
+    async def add_comment(
+        self,
+        lead_id: int,
+        text: str,
+        author: str,
+        tenant_id: int | None = None,
+    ) -> LeadComment | None:
+        if tenant_id is not None:
+            lead = await self.get_by_id(lead_id, tenant_id=tenant_id)
+            if not lead:
+                return None
         comment = LeadComment(lead_id=lead_id, text=text, author=author)
         self.session.add(comment)
         await self.session.flush()
@@ -434,7 +450,7 @@ class LeadRepository:
         reminder = Reminder(
             lead_id=lead_id,
             manager_tg_id=manager_tg_id,
-            remind_at=remind_at,
+            remind_at=_naive(remind_at),
             message=message,
             is_sent=False,
         )
@@ -442,11 +458,15 @@ class LeadRepository:
         await self.session.flush()
         return reminder
 
-    async def get_pending_reminders(self) -> list[Reminder]:
+    async def get_pending_reminders(self, *, due_before_now: bool = False) -> list[Reminder]:
+        now = datetime.now(timezone.utc)
+        query = select(Reminder).where(Reminder.is_sent == False)
+        if due_before_now:
+            query = query.where(Reminder.remind_at <= now)
+        else:
+            query = query.where(Reminder.remind_at > now)
         result = await self.session.execute(
-            select(Reminder)
-            .where(Reminder.is_sent == False, Reminder.remind_at > datetime.now(timezone.utc))
-            .order_by(Reminder.remind_at.asc())
+            query.order_by(Reminder.remind_at.asc())
         )
         return result.scalars().all()
 
@@ -659,3 +679,4 @@ class LeadRepository:
             "total": total,
             "by_status": by_status,
         }
+

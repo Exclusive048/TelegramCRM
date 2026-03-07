@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     support_username: str = "@support"
     yukassa_shop_id: str = ""
     yukassa_secret_key: str = ""
+    yukassa_ip_whitelist: str = ""
 
     @field_validator("public_domain")
     @classmethod
@@ -37,6 +38,11 @@ class Settings(BaseSettings):
         if not v or v.strip().upper() == "YOUR_DOMAIN":
             raise ValueError("Укажите реальный домен в .env (PUBLIC_DOMAIN=example.com)")
         return v.replace("https://", "").replace("http://", "").strip("/")
+
+
+    @property
+    def yukassa_ip_whitelist_set(self) -> set[str]:
+        return {ip.strip() for ip in self.yukassa_ip_whitelist.split(",") if ip.strip()}
 
 
 settings = Settings()

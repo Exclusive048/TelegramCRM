@@ -36,7 +36,7 @@ async def main() -> None:
         use_redis=settings.use_redis,
         redis_url=settings.redis_url,
     )
-    app = create_app(bot, sender)
+    app = create_app(bot, sender, redis_url=settings.redis_url)
     configure_event_loop()
     await start_api_server(app)
 
