@@ -2,7 +2,8 @@
 /cabinet — кабинет администрирования.
 Доступен только CRM-администраторам.
 """
-from datetime import datetime, timedelta
+import asyncio
+from datetime import datetime, timedelta, timezone
 import io  # FIXED #13
 
 import openpyxl  # FIXED #13
@@ -15,7 +16,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from app.core.config import settings
 from app.bot.constants.ttl import TTL_MENU_SEC, TTL_ERROR_SEC
-from app.core.permissions import is_crm_admin
+from app.bot.utils.handler_helpers import resolve_admin_context
 from app.db.database import AsyncSessionLocal
 from app.db.repositories.lead_repository import LeadRepository
 from app.db.models.lead import LeadStatus
@@ -23,16 +24,6 @@ from app.telegram.html_utils import html_escape
 from app.telegram.safe_sender import TelegramSafeSender
 
 router = Router()
-
-
-def _get_group_id(tenant) -> int | None:
-    return tenant.group_id if tenant else None
-
-
-async def _check_admin(sender: TelegramSafeSender, user_id: int, group_id: int) -> bool:
-    async with AsyncSessionLocal() as session:
-        repo = LeadRepository(session)
-        return await is_crm_admin(sender, repo, group_id, user_id)
 
 
 def _main_keyboard() -> InlineKeyboardBuilder:
@@ -77,7 +68,7 @@ def _period_keyboard(prefix: str) -> InlineKeyboardBuilder:
 
 
 def _period_dates(period: str) -> tuple[datetime, datetime]:
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     if period == "today":
         return now.replace(hour=0, minute=0, second=0, microsecond=0), now
     if period == "week":
@@ -85,146 +76,14 @@ def _period_dates(period: str) -> tuple[datetime, datetime]:
     return now - timedelta(days=30), now
 
 
-@router.message(Command("cabinet"))
-async def cmd_cabinet(message: Message, sender: TelegramSafeSender, tenant=None):
-    group_id = _get_group_id(tenant) or (message.chat.id if message.chat.id < 0 else None)
-    if not group_id:
-        return
-    if not await _check_admin(sender, message.from_user.id, group_id):
-        await sender.send_ephemeral_text(
-            chat_id=message.chat.id,
-            message_thread_id=message.message_thread_id,
-            text="⛔️ Кабинет доступен только CRM-администраторам.",
-            ttl_sec=TTL_ERROR_SEC,
-        )
-        return
-
-    await sender.send_message(
-        chat_id=message.chat.id,
-        message_thread_id=message.message_thread_id,
-        text="🗂 <b>Кабинет</b>\n\nВыберите раздел:",
-        reply_markup=_main_keyboard().as_markup(),
-        parse_mode="HTML",
-    )
-    try:
-        await sender.delete_message(
-            chat_id=message.chat.id,
-            message_id=message.message_id,
-            thread_id=message.message_thread_id,
-        )
-    except Exception:
-        pass
-
-
-@router.callback_query(F.data == "cab:back")
-async def cab_back(callback: CallbackQuery, sender: TelegramSafeSender, tenant=None):
-    group_id = _get_group_id(tenant) or (callback.message.chat.id if callback.message.chat.id < 0 else None)
-    if not group_id:
-        await sender.answer(callback)
-        return
-    if not await _check_admin(sender, callback.from_user.id, group_id):
-        await sender.answer(callback)
-        return
-    await sender.answer(callback)
-    await sender.edit_text(
-        chat_id=callback.message.chat.id,
-        message_id=callback.message.message_id,
-        text="🗂 <b>Кабинет</b>\n\nВыберите раздел:",
-        reply_markup=_main_keyboard().as_markup(),
-        parse_mode="HTML",
-        thread_id=callback.message.message_thread_id,
-    )
-
-
-# ── Экспорт ──────────────────────────────────────────
-
-
-@router.callback_query(F.data == "cab:export")
-async def cab_export_menu(callback: CallbackQuery, sender: TelegramSafeSender, tenant=None):
-    group_id = _get_group_id(tenant) or (callback.message.chat.id if callback.message.chat.id < 0 else None)
-    if not group_id:
-        await sender.answer(callback)
-        return
-    if not await _check_admin(sender, callback.from_user.id, group_id):
-        await sender.answer(callback, "⛔️ Нет доступа", show_alert=True)
-        return
-    await sender.answer(callback)
-    await sender.edit_text(
-        chat_id=callback.message.chat.id,
-        message_id=callback.message.message_id,
-        text="Экспорт клиентов\nВыберите этап:",
-        reply_markup=_stage_keyboard("cab:export_stage").as_markup(),
-        thread_id=callback.message.message_thread_id,
-    )
-
-
-@router.callback_query(F.data.startswith("cab:export_stage:"))
-async def cab_export_period(callback: CallbackQuery, sender: TelegramSafeSender, tenant=None):
-    group_id = _get_group_id(tenant) or (callback.message.chat.id if callback.message.chat.id < 0 else None)
-    if not group_id:
-        await sender.answer(callback)
-        return
-    if not await _check_admin(sender, callback.from_user.id, group_id):
-        await sender.answer(callback, "⛔️ Нет доступа", show_alert=True)
-        return
-    await sender.answer(callback)
-    stage = callback.data.split(":")[2]
-    await sender.edit_message_text(  # FIXED #5
-        chat_id=callback.message.chat.id,
-        message_id=callback.message.message_id,
-        text="📅 <b>Выберите период</b>:",
-        reply_markup=_period_keyboard(f"cab:export_do:{stage}").as_markup(),
-        parse_mode="HTML",
-        thread_id=callback.message.message_thread_id,
-    )
-    await sender.schedule_delete(
-        chat_id=callback.message.chat.id,
-        message_id=callback.message.message_id,
-        thread_id=callback.message.message_thread_id,
-        ttl_sec=TTL_MENU_SEC,
-    )
-
-
-@router.callback_query(F.data.startswith("cab:export_do:"))
-async def cab_export_do(callback: CallbackQuery, sender: TelegramSafeSender, tenant=None):
-    group_id = _get_group_id(tenant) or (callback.message.chat.id if callback.message.chat.id < 0 else None)
-    if not group_id:
-        await sender.answer(callback)
-        return
-    if not await _check_admin(sender, callback.from_user.id, group_id):
-        await sender.answer(callback, "⛔️ Нет доступа", show_alert=True)
-        return
-    parts = callback.data.split(":")
-    if len(parts) < 4:
-        await sender.answer(callback)
-        return
-    stage = parts[2]
-    period = parts[3]
-    date_from, date_to = _period_dates(period)
-
-    status = LeadStatus(stage)
-
-    async with AsyncSessionLocal() as session:
-        repo = LeadRepository(session)
-        leads, total = await repo.get_list(status=status, date_from=date_from, date_to=date_to, per_page=10000)
-
-    if not leads:
-        msg = await sender.answer(callback.message, "Нет заявок по выбранному фильтру.")
-        await sender.schedule_delete(
-            chat_id=msg.chat.id,
-            message_id=msg.message_id,
-            thread_id=msg.message_thread_id,
-            ttl_sec=TTL_MENU_SEC,
-        )
-        return
-
+def build_workbook(leads) -> bytes:
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Заявки"
 
     headers = [
-        "ID", "Имя", "Телефон", "Почта", "Источник", "Услуга", "Сумма",
-        "Статус", "Ответственный", "Комментарий", "UTM", "Дата создания", "Дата закрытия",
+        "ID", "Имя", "Телефон", "Эл. почта", "Источник", "Услуга", "Сумма",
+        "Статус", "Менеджер", "Комментарий", "UTM", "Создана", "Закрыта",
     ]
     header_fill = PatternFill("solid", fgColor="1A56DB")
     header_font = Font(bold=True, color="FFFFFF")
@@ -236,7 +95,7 @@ async def cab_export_do(callback: CallbackQuery, sender: TelegramSafeSender, ten
         cell.alignment = Alignment(horizontal="center")
 
     status_labels = {
-        "new": "Лиды",
+        "new": "Лид",
         "in_progress": "В работе",
         "paid": "Оплачено",
         "success": "Успех",
@@ -268,31 +127,149 @@ async def cab_export_do(callback: CallbackQuery, sender: TelegramSafeSender, ten
 
     buffer = io.BytesIO()
     wb.save(buffer)
-    buffer.seek(0)
+    return buffer.getvalue()
 
-    filename = f"leads_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
+
+@router.message(Command("cabinet"))
+async def cmd_cabinet(message: Message, sender: TelegramSafeSender, tenant=None):
+    ctx = await resolve_admin_context(message, tenant, sender)
+    if not ctx:
+        await sender.send_ephemeral_text(
+            chat_id=message.chat.id,
+            message_thread_id=message.message_thread_id,
+            text="⛔️ Кабинет доступен только CRM-администраторам.",
+            ttl_sec=TTL_ERROR_SEC,
+        )
+        return
+
+    await sender.send_message(
+        chat_id=message.chat.id,
+        message_thread_id=message.message_thread_id,
+        text="🗂 <b>Кабинет</b>\n\nВыберите раздел.",
+        reply_markup=_main_keyboard().as_markup(),
+        parse_mode="HTML",
+    )
+    try:
+        await sender.delete_message(
+            chat_id=message.chat.id,
+            message_id=message.message_id,
+            thread_id=message.message_thread_id,
+        )
+    except Exception:
+        pass
+
+
+@router.callback_query(F.data == "cab:back")
+async def cab_back(callback: CallbackQuery, sender: TelegramSafeSender, tenant=None):
+    ctx = await resolve_admin_context(callback, tenant, sender)
+    if not ctx:
+        await sender.answer(callback)
+        return
+    group_id, _ = ctx
+    await sender.answer(callback)
+    await sender.edit_text(
+        chat_id=callback.message.chat.id,
+        message_id=callback.message.message_id,
+        text="🗂 <b>Кабинет</b>\n\nВыберите раздел.",
+        reply_markup=_main_keyboard().as_markup(),
+        parse_mode="HTML",
+        thread_id=callback.message.message_thread_id,
+    )
+
+
+@router.callback_query(F.data == "cab:export")
+async def cab_export_menu(callback: CallbackQuery, sender: TelegramSafeSender, tenant=None):
+    ctx = await resolve_admin_context(callback, tenant, sender)
+    if not ctx:
+        await sender.answer(callback, "⛔️ Нет доступа.", show_alert=True)
+        return
+    group_id, _ = ctx
+    await sender.answer(callback)
+    await sender.edit_text(
+        chat_id=callback.message.chat.id,
+        message_id=callback.message.message_id,
+        text="📤 Экспорт заявок.\nВыберите этап.",
+        reply_markup=_stage_keyboard("cab:export_stage").as_markup(),
+        thread_id=callback.message.message_thread_id,
+    )
+
+
+@router.callback_query(F.data.startswith("cab:export_stage:"))
+async def cab_export_period(callback: CallbackQuery, sender: TelegramSafeSender, tenant=None):
+    ctx = await resolve_admin_context(callback, tenant, sender)
+    if not ctx:
+        await sender.answer(callback, "⛔️ Нет доступа.", show_alert=True)
+        return
+    group_id, _ = ctx
+    await sender.answer(callback)
+    stage = callback.data.split(":")[2]
+    await sender.edit_message_text(
+        chat_id=callback.message.chat.id,
+        message_id=callback.message.message_id,
+        text="📅 <b>Выберите период.</b>",
+        reply_markup=_period_keyboard(f"cab:export_do:{stage}").as_markup(),
+        parse_mode="HTML",
+        thread_id=callback.message.message_thread_id,
+    )
+    await sender.schedule_delete(
+        chat_id=callback.message.chat.id,
+        message_id=callback.message.message_id,
+        thread_id=callback.message.message_thread_id,
+        ttl_sec=TTL_MENU_SEC,
+    )
+
+
+@router.callback_query(F.data.startswith("cab:export_do:"))
+async def cab_export_do(callback: CallbackQuery, sender: TelegramSafeSender, tenant=None):
+    ctx = await resolve_admin_context(callback, tenant, sender)
+    if not ctx:
+        await sender.answer(callback, "⛔️ Нет доступа.", show_alert=True)
+        return
+    group_id, _ = ctx
+    parts = callback.data.split(":")
+    if len(parts) < 4:
+        await sender.answer(callback)
+        return
+    stage = parts[2]
+    period = parts[3]
+    date_from, date_to = _period_dates(period)
+
+    status = LeadStatus(stage)
+
+    async with AsyncSessionLocal() as session:
+        repo = LeadRepository(session)
+        leads, total = await repo.get_list(status=status, date_from=date_from, date_to=date_to, per_page=10000)
+
+    if not leads:
+        msg = await sender.answer(callback.message, "ℹ️ Нет заявок по выбранному фильтру.")
+        await sender.schedule_delete(
+            chat_id=msg.chat.id,
+            message_id=msg.message_id,
+            thread_id=msg.message_thread_id,
+            ttl_sec=TTL_MENU_SEC,
+        )
+        return
+
+    workbook_bytes = await asyncio.get_event_loop().run_in_executor(None, build_workbook, leads)
+
+    filename = f"leads_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M')}.xlsx"
     await sender.send_document(
         chat_id=callback.message.chat.id,
         message_thread_id=callback.message.message_thread_id,
-        document=BufferedInputFile(buffer.read(), filename=filename),
-        caption=f"📤 Экспорт: {total} заявок\nФайл: {filename}",
+        document=BufferedInputFile(workbook_bytes, filename=filename),
+        caption=f"📤 Экспорт: {total} заявок.\nФайл: {filename}",
         parse_mode=None,
         ttl_sec=TTL_MENU_SEC,
     )
 
 
-# ── Аналитика ────────────────────────────────────────
-
-
 @router.callback_query(F.data == "cab:analytics")
 async def cab_analytics(callback: CallbackQuery, sender: TelegramSafeSender, tenant=None):
-    group_id = _get_group_id(tenant) or (callback.message.chat.id if callback.message.chat.id < 0 else None)
-    if not group_id:
-        await sender.answer(callback)
+    ctx = await resolve_admin_context(callback, tenant, sender)
+    if not ctx:
+        await sender.answer(callback, "⛔️ Нет доступа.", show_alert=True)
         return
-    if not await _check_admin(sender, callback.from_user.id, group_id):
-        await sender.answer(callback, "⛔️ Нет доступа", show_alert=True)
-        return
+    group_id, _ = ctx
     await sender.answer(callback)
     builder = InlineKeyboardBuilder()
     builder.row(
@@ -318,13 +295,11 @@ async def cab_analytics(callback: CallbackQuery, sender: TelegramSafeSender, ten
 
 @router.callback_query(F.data.startswith("cab:analytics:conversion"))
 async def cab_analytics_conversion(callback: CallbackQuery, sender: TelegramSafeSender, tenant=None):
-    group_id = _get_group_id(tenant) or (callback.message.chat.id if callback.message.chat.id < 0 else None)
-    if not group_id:
-        await sender.answer(callback)
+    ctx = await resolve_admin_context(callback, tenant, sender)
+    if not ctx:
+        await sender.answer(callback, "⛔️ Нет доступа.", show_alert=True)
         return
-    if not await _check_admin(sender, callback.from_user.id, group_id):
-        await sender.answer(callback, "⛔️ Нет доступа", show_alert=True)
-        return
+    group_id, _ = ctx
     await sender.answer(callback)
     await sender.edit_message_text(  # FIXED #5
         chat_id=callback.message.chat.id,
@@ -344,13 +319,11 @@ async def cab_analytics_conversion(callback: CallbackQuery, sender: TelegramSafe
 
 @router.callback_query(F.data.startswith("cab:analytics_conversion:"))
 async def cab_analytics_conversion_period(callback: CallbackQuery, sender: TelegramSafeSender, tenant=None):
-    group_id = _get_group_id(tenant) or (callback.message.chat.id if callback.message.chat.id < 0 else None)
-    if not group_id:
-        await sender.answer(callback)
+    ctx = await resolve_admin_context(callback, tenant, sender)
+    if not ctx:
+        await sender.answer(callback, "⛔️ Нет доступа.", show_alert=True)
         return
-    if not await _check_admin(sender, callback.from_user.id, group_id):
-        await sender.answer(callback, "⛔️ Нет доступа", show_alert=True)
-        return
+    group_id, _ = ctx
     await sender.answer(callback)
     period = callback.data.split(":")[2]
     date_from, date_to = _period_dates(period)
@@ -390,13 +363,11 @@ async def cab_analytics_conversion_period(callback: CallbackQuery, sender: Teleg
 
 @router.callback_query(F.data.startswith("cab:analytics:activity"))
 async def cab_analytics_activity(callback: CallbackQuery, sender: TelegramSafeSender, tenant=None):
-    group_id = _get_group_id(tenant) or (callback.message.chat.id if callback.message.chat.id < 0 else None)
-    if not group_id:
-        await sender.answer(callback)
+    ctx = await resolve_admin_context(callback, tenant, sender)
+    if not ctx:
+        await sender.answer(callback, "⛔️ Нет доступа.", show_alert=True)
         return
-    if not await _check_admin(sender, callback.from_user.id, group_id):
-        await sender.answer(callback, "⛔️ Нет доступа", show_alert=True)
-        return
+    group_id, _ = ctx
     await sender.answer(callback)
     await sender.edit_message_text(  # FIXED #5
         chat_id=callback.message.chat.id,
@@ -416,13 +387,11 @@ async def cab_analytics_activity(callback: CallbackQuery, sender: TelegramSafeSe
 
 @router.callback_query(F.data.startswith("cab:analytics_activity:"))
 async def cab_analytics_activity_period(callback: CallbackQuery, sender: TelegramSafeSender, tenant=None):
-    group_id = _get_group_id(tenant) or (callback.message.chat.id if callback.message.chat.id < 0 else None)
-    if not group_id:
-        await sender.answer(callback)
+    ctx = await resolve_admin_context(callback, tenant, sender)
+    if not ctx:
+        await sender.answer(callback, "⛔️ Нет доступа.", show_alert=True)
         return
-    if not await _check_admin(sender, callback.from_user.id, group_id):
-        await sender.answer(callback, "⛔️ Нет доступа", show_alert=True)
-        return
+    group_id, _ = ctx
     await sender.answer(callback)
     period = callback.data.split(":")[2]
     async with AsyncSessionLocal() as session:
@@ -430,14 +399,14 @@ async def cab_analytics_activity_period(callback: CallbackQuery, sender: Telegra
         managers = await repo.get_all_managers(tenant_id=tenant.id if tenant else None)
 
     builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text="All", callback_data=f"cab:analytics_activity_run:{period}:all"))
+    builder.row(InlineKeyboardButton(text="Все", callback_data=f"cab:analytics_activity_run:{period}:all"))
     for m in managers:
         builder.row(InlineKeyboardButton(text=m.name, callback_data=f"cab:analytics_activity_run:{period}:{m.id}"))
     builder.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="cab:back"))
     await sender.edit_text(
         chat_id=callback.message.chat.id,
         message_id=callback.message.message_id,
-        text="Выберите сотрудника:",
+        text="ℹ️ Выберите сотрудника:",
         reply_markup=builder.as_markup(),
         parse_mode="HTML",
         thread_id=callback.message.message_thread_id,
@@ -452,13 +421,11 @@ async def cab_analytics_activity_period(callback: CallbackQuery, sender: Telegra
 
 @router.callback_query(F.data.startswith("cab:analytics_activity_run:"))
 async def cab_analytics_activity_run(callback: CallbackQuery, sender: TelegramSafeSender, tenant=None):
-    group_id = _get_group_id(tenant) or (callback.message.chat.id if callback.message.chat.id < 0 else None)
-    if not group_id:
-        await sender.answer(callback)
+    ctx = await resolve_admin_context(callback, tenant, sender)
+    if not ctx:
+        await sender.answer(callback, "⛔️ Нет доступа.", show_alert=True)
         return
-    if not await _check_admin(sender, callback.from_user.id, group_id):
-        await sender.answer(callback, "⛔️ Нет доступа", show_alert=True)
-        return
+    group_id, _ = ctx
     await sender.answer(callback)
     _, _, period, manager_raw = callback.data.split(":")
     date_from, date_to = _period_dates(period)
@@ -507,13 +474,11 @@ def _pct(part: int, total: int) -> str:
 
 @router.callback_query(F.data == "cab:integrations")
 async def cab_integrations(callback: CallbackQuery, sender: TelegramSafeSender, tenant=None):
-    group_id = _get_group_id(tenant) or (callback.message.chat.id if callback.message.chat.id < 0 else None)
-    if not group_id:
-        await sender.answer(callback)
+    ctx = await resolve_admin_context(callback, tenant, sender)
+    if not ctx:
+        await sender.answer(callback, "⛔️ Нет доступа.", show_alert=True)
         return
-    if not await _check_admin(sender, callback.from_user.id, group_id):
-        await sender.answer(callback, "⛔️ Нет доступа", show_alert=True)
-        return
+    group_id, _ = ctx
     await sender.answer(callback)
     raw_domain = (settings.public_domain or "YOUR_DOMAIN").strip()
     domain = raw_domain.replace("https://", "").replace("http://", "").strip("/") or "YOUR_DOMAIN"
@@ -529,7 +494,7 @@ async def cab_integrations(callback: CallbackQuery, sender: TelegramSafeSender, 
         "📋 JS-сниппет отправлен файлом"
     )
     builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text="📋 Скопировать URL", callback_data="cab:copy_webhook"))
+    builder.row(InlineKeyboardButton(text="📋 Скопировать ссылку", callback_data="cab:copy_webhook"))
     builder.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="cab:back"))
     await sender.edit_message_text(  # FIXED #5
         chat_id=callback.message.chat.id,
@@ -559,20 +524,18 @@ async def cab_integrations(callback: CallbackQuery, sender: TelegramSafeSender, 
         await sender.send_ephemeral_text(
             chat_id=callback.message.chat.id,
             message_thread_id=callback.message.message_thread_id,
-            text="Не удалось отправить файл JS-сниппета. Проверьте integrations/tilda_snippet.js",
+            text="⛔️ Не удалось отправить файл JS-сниппета. Проверьте integrations/tilda_snippet.js.",
             ttl_sec=TTL_ERROR_SEC,
         )
 
 
 @router.callback_query(F.data == "cab:copy_webhook")
 async def cab_copy_webhook(callback: CallbackQuery, sender: TelegramSafeSender, tenant=None):
-    group_id = _get_group_id(tenant) or (callback.message.chat.id if callback.message.chat.id < 0 else None)
-    if not group_id:
+    ctx = await resolve_admin_context(callback, tenant, sender)
+    if not ctx:
         await sender.answer(callback)
         return
-    if not await _check_admin(sender, callback.from_user.id, group_id):
-        await sender.answer(callback)
-        return
+    group_id, _ = ctx
     await sender.answer(callback)
     raw_domain = (settings.public_domain or "YOUR_DOMAIN").strip()
     domain = raw_domain.replace("https://", "").replace("http://", "").strip("/") or "YOUR_DOMAIN"
@@ -590,13 +553,11 @@ async def cab_copy_webhook(callback: CallbackQuery, sender: TelegramSafeSender, 
 
 @router.callback_query(F.data == "cab:tariff")
 async def cab_tariff(callback: CallbackQuery, sender: TelegramSafeSender, tenant=None):
-    group_id = _get_group_id(tenant) or (callback.message.chat.id if callback.message.chat.id < 0 else None)
-    if not group_id:
-        await sender.answer(callback)
+    ctx = await resolve_admin_context(callback, tenant, sender)
+    if not ctx:
+        await sender.answer(callback, "⛔️ Нет доступа.", show_alert=True)
         return
-    if not await _check_admin(sender, callback.from_user.id, group_id):
-        await sender.answer(callback, "⛔️ Нет доступа", show_alert=True)
-        return
+    group_id, _ = ctx
     await sender.answer(callback)
     await sender.edit_text(
         chat_id=callback.message.chat.id,
@@ -613,3 +574,7 @@ async def cab_tariff(callback: CallbackQuery, sender: TelegramSafeSender, tenant
         thread_id=callback.message.message_thread_id,
         ttl_sec=TTL_MENU_SEC,
     )
+
+
+
+

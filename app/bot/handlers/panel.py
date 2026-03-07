@@ -6,7 +6,6 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 from loguru import logger
 
-from app.bot.constants.ttl import TTL_MENU_SEC
 from app.bot.topic_resolver import resolve_topic_thread_id
 from app.bot.topic_cache import invalidate as invalidate_topic_cache
 from app.bot.topics import TOPIC_SPECS, TopicKey
@@ -19,17 +18,13 @@ from app.bot.ui.panel import (
     build_kb_panel_team_add_prompt,
     parse_panel_callback,
 )
-from app.core.permissions import is_crm_admin
+from app.bot.utils.handler_helpers import resolve_admin_context
 from app.db.database import AsyncSessionLocal
 from app.db.repositories.lead_repository import LeadRepository
 from app.db.repositories.tenant_topics import TenantTopicRepository
 from app.telegram.safe_sender import TelegramSafeSender
 
 router = Router()
-
-
-def _get_group_id(tenant) -> int | None:
-    return tenant.group_id if tenant else None
 
 
 def _get_topic_spec(key: TopicKey):
@@ -59,12 +54,6 @@ async def _probe_topic_thread(sender: TelegramSafeSender, chat_id: int, thread_i
 
 class PanelAddManagerState(StatesGroup):
     waiting_for_contact = State()
-
-
-async def _check_admin(sender: TelegramSafeSender, user_id: int, group_id: int) -> bool:
-    async with AsyncSessionLocal() as session:
-        repo = LeadRepository(session)
-        return await is_crm_admin(sender, repo, group_id, user_id)
 
 
 async def _pin_panel_message(sender: TelegramSafeSender, chat_id: int, topic_id: int, message_id: int):
@@ -198,10 +187,8 @@ async def ensure_panel_message(sender: TelegramSafeSender, chat_id: int, topic_i
 @router.message(Command("panel"))  # FIXED #11
 async def cmd_panel(message: Message, sender: TelegramSafeSender, tenant=None):
     """Восстанавливает пульт управления командой в текущем топике."""  # FIXED #11
-    group_id = _get_group_id(tenant) or (message.chat.id if message.chat.id < 0 else None)
-    if not group_id:
-        return
-    if not await _check_admin(sender, message.from_user.id, group_id):
+    ctx = await resolve_admin_context(message, tenant, sender)
+    if not ctx:
         await sender.send_ephemeral_text(
             chat_id=message.chat.id,
             message_thread_id=message.message_thread_id,
@@ -238,13 +225,11 @@ async def handle_panel_actions(callback: CallbackQuery, state: FSMContext, sende
         await sender.answer(callback)
         return
 
-    group_id = _get_group_id(tenant) or (callback.message.chat.id if callback.message.chat.id < 0 else None)
-    if not group_id:
-        await sender.answer(callback)
-        return
-    if not await _check_admin(sender, callback.from_user.id, group_id):
+    ctx = await resolve_admin_context(callback, tenant, sender)
+    if not ctx:
         await sender.answer(callback, "⛔ Нет доступа.", show_alert=True)
         return
+    group_id, _ = ctx
 
     await sender.answer(callback)
 
@@ -307,11 +292,10 @@ async def handle_panel_actions(callback: CallbackQuery, state: FSMContext, sende
 
 @router.message(PanelAddManagerState.waiting_for_contact)
 async def handle_manager_contact(message: Message, state: FSMContext, sender: TelegramSafeSender, tenant=None):
-    group_id = _get_group_id(tenant) or (message.chat.id if message.chat.id < 0 else None)
-    if not group_id:
+    ctx = await resolve_admin_context(message, tenant, sender)
+    if not ctx:
         return
-    if not await _check_admin(sender, message.from_user.id, group_id):
-        return
+    group_id, _ = ctx
 
     data = await state.get_data()
     panel_chat_id = data.get("panel_chat_id", group_id)
@@ -433,3 +417,4 @@ async def handle_manager_contact(message: Message, state: FSMContext, sender: Te
         )
     except Exception:
         pass
+

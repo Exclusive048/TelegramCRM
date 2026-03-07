@@ -21,12 +21,15 @@ class TenantMiddleware(BaseMiddleware):
 
         # ── Логируем ВСЕ входящие апдейты ─────────────────────────────────────
         if isinstance(event, Message):
+            text_type = type(event.text).__name__ if event.text is not None else None
+            text_len = len(event.text) if isinstance(event.text, str) else 0
             logger.debug(
                 f"[MW] MESSAGE: chat_id={event.chat.id} "
                 f"chat_type={event.chat.type} "
                 f"thread_id={event.message_thread_id} "
                 f"from={event.from_user.id if event.from_user else None} "
-                f"text={event.text!r} "
+                f"text_type={text_type} "
+                f"text_len={text_len} "
                 f"reply_to={event.reply_to_message.message_id if event.reply_to_message else None}"
             )
         elif isinstance(event, CallbackQuery):
@@ -81,8 +84,8 @@ class TenantMiddleware(BaseMiddleware):
                         await event.answer(text)
                     elif isinstance(event, CallbackQuery):
                         await event.answer(text, show_alert=True)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(f"[MW] failed to notify inactive tenant chat_id={chat_id}: {e}")
                 logger.debug("[MW] tenant inactive → DROP")
                 return
 

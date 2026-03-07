@@ -5,7 +5,6 @@ from typing import Any, Awaitable, Callable, Dict
 from aiogram import BaseMiddleware, Dispatcher
 from aiogram.types import TelegramObject
 
-from app.telegram.safe_sender import TelegramSafeSender
 
 
 class SenderMiddleware(BaseMiddleware):

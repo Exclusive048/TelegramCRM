@@ -1,4 +1,3 @@
-import secrets
 from fastapi import Header, HTTPException, Request
 from app.db.database import AsyncSessionLocal
 from app.db.repositories.tenant_repository import TenantRepository

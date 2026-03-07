@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-import functools
 from datetime import datetime, timezone, timedelta
 
 from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, InlineKeyboardButton, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from loguru import logger
 from sqlalchemy import select, func, update
 
 from app.core.config import settings
@@ -33,7 +31,7 @@ def is_admin(user_id: int) -> bool:
 # ── Вспомогательные функции ────────────────────────────────────────────────────
 
 def _plan_label(plan: str) -> str:
-    return {"trial": "Пробный", "base": "Базовый", "pro": "Pro"}.get(plan, plan or "—")
+    return {"trial": "Пробный", "base": "Базовый", "pro": "Про"}.get(plan, plan or "—")
 
 
 def _tenant_admin_text(t: Tenant) -> str:
@@ -101,7 +99,7 @@ def _tenant_admin_keyboard(t: Tenant) -> InlineKeyboardBuilder:
 @router.message(Command("clients"))
 async def cmd_clients(message: Message):
     if not is_admin(message.from_user.id):
-        await message.answer("⛔ Нет доступа")
+        await message.answer("⛔️ Нет доступа.")
         return
     await _show_clients_page(message, page=0, edit=False)
 
@@ -109,7 +107,7 @@ async def cmd_clients(message: Message):
 @router.callback_query(F.data.startswith("adm:clients:"))
 async def cb_clients_page(callback: CallbackQuery):
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Нет доступа", show_alert=True)
+        await callback.answer("⛔️ Нет доступа.", show_alert=True)
         return
     page = int(callback.data.split(":")[2])
     await callback.answer()
@@ -171,7 +169,7 @@ async def _show_clients_page(message: Message, page: int, edit: bool) -> None:
 @router.message(Command("stats"))
 async def cmd_stats(message: Message):
     if not is_admin(message.from_user.id):
-        await message.answer("⛔ Нет доступа")
+        await message.answer("⛔️ Нет доступа.")
         return
     await _show_stats(message, edit=False)
 
@@ -179,7 +177,7 @@ async def cmd_stats(message: Message):
 @router.callback_query(F.data == "adm:stats")
 async def cb_stats(callback: CallbackQuery):
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Нет доступа", show_alert=True)
+        await callback.answer("⛔️ Нет доступа.", show_alert=True)
         return
     await callback.answer()
     await _show_stats(callback.message, edit=True)
@@ -254,14 +252,14 @@ async def _show_stats(message: Message, edit: bool) -> None:
 @router.callback_query(F.data.startswith("adm:detail:"))
 async def cb_adm_detail(callback: CallbackQuery):
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔ Нет доступа", show_alert=True)
+        await callback.answer("⛔️ Нет доступа.", show_alert=True)
         return
     tenant_id = int(callback.data.split(":")[2])
     async with AsyncSessionLocal() as session:
         repo = TenantRepository(session)
         tenant = await repo.get_by_id(tenant_id)
     if not tenant:
-        await callback.answer("Не найдено", show_alert=True)
+        await callback.answer("⛔️ Не найдено.", show_alert=True)
         return
     await callback.answer()
     await callback.message.edit_text(
@@ -276,7 +274,7 @@ async def cb_adm_detail(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("adm:block:"))
 async def cb_adm_block(callback: CallbackQuery):
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔", show_alert=True)
+        await callback.answer("⛔️ Нет доступа.", show_alert=True)
         return
     tenant_id = int(callback.data.split(":")[2])
     async with AsyncSessionLocal() as session:
@@ -286,7 +284,7 @@ async def cb_adm_block(callback: CallbackQuery):
         await session.commit()
         repo = TenantRepository(session)
         tenant = await repo.get_by_id(tenant_id)
-    await callback.answer("🚫 Заблокирован", show_alert=True)
+    await callback.answer("🚫 Аккаунт заблокирован.", show_alert=True)
     await notify_tenant_owner(
         tenant.owner_tg_id,
         f"🚫 <b>Ваш аккаунт заблокирован администратором.</b>\n\n"
@@ -302,7 +300,7 @@ async def cb_adm_block(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("adm:unblock:"))
 async def cb_adm_unblock(callback: CallbackQuery):
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔", show_alert=True)
+        await callback.answer("⛔️ Нет доступа.", show_alert=True)
         return
     tenant_id = int(callback.data.split(":")[2])
     async with AsyncSessionLocal() as session:
@@ -312,7 +310,7 @@ async def cb_adm_unblock(callback: CallbackQuery):
         await session.commit()
         repo = TenantRepository(session)
         tenant = await repo.get_by_id(tenant_id)
-    await callback.answer("✅ Разблокирован", show_alert=True)
+    await callback.answer("✅ Аккаунт разблокирован.", show_alert=True)
     await notify_tenant_owner(
         tenant.owner_tg_id,
         "✅ <b>Ваш аккаунт восстановлен.</b>\n\nДоступ к CRM активирован.",
@@ -329,19 +327,19 @@ async def cb_adm_unblock(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("adm:trial:"))
 async def cb_adm_trial(callback: CallbackQuery):
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔", show_alert=True)
+        await callback.answer("⛔️ Нет доступа.", show_alert=True)
         return
     tenant_id = int(callback.data.split(":")[2])
     async with AsyncSessionLocal() as session:
         repo = TenantRepository(session)
         tenant = await repo.get_by_id(tenant_id)
         if tenant.trial_used:
-            await callback.answer("Пробный период уже использован", show_alert=True)
+            await callback.answer("⚠️ Пробный период уже использован.", show_alert=True)
             return
         await repo.activate_trial(tenant_id, days=settings.trial_days)
         await session.commit()
         tenant = await repo.get_by_id(tenant_id)
-    await callback.answer("✅ Пробный период выдан", show_alert=True)
+    await callback.answer("✅ Пробный период активирован.", show_alert=True)
     await notify_tenant_owner(
         tenant.owner_tg_id,
         f"🎁 <b>Администратор активировал пробный период!</b>\n\n"
@@ -361,7 +359,7 @@ async def cb_adm_trial(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("adm:extend:"))
 async def cb_adm_extend(callback: CallbackQuery):
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔", show_alert=True)
+        await callback.answer("⛔️ Нет доступа.", show_alert=True)
         return
     tenant_id = int(callback.data.split(":")[2])
     async with AsyncSessionLocal() as session:
@@ -389,7 +387,7 @@ async def cb_adm_extend(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("adm:msg:"))
 async def cb_adm_msg(callback: CallbackQuery):
     if not is_admin(callback.from_user.id):
-        await callback.answer("⛔", show_alert=True)
+        await callback.answer("⛔️ Нет доступа.", show_alert=True)
         return
     tenant_id = int(callback.data.split(":")[2])
     _pending_msg[callback.from_user.id] = tenant_id
@@ -419,7 +417,7 @@ async def handle_admin_freetext(message: Message):
         tenant = await repo.get_by_id(tenant_id)
 
     if not tenant:
-        await message.answer("Тенант не найден.")
+        await message.answer("⛔️ Аккаунт не найден.")
         return
 
     await notify_tenant_owner(

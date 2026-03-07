@@ -13,13 +13,23 @@ from app.telegram.safe_sender import TelegramSafeSender
 
 
 class LeadService:
-    def __init__(self, repo: LeadRepository, sender: TelegramSafeSender, group_id: int):
+    def __init__(
+        self,
+        repo: LeadRepository,
+        sender: TelegramSafeSender,
+        group_id: int,
+        tenant_id: int | None = None,
+    ):
         self.repo = repo
         self.sender = sender
         self.group_id = group_id
+        self.tenant_id = tenant_id
 
     async def create_lead(self, data: dict) -> Lead:
-        lead = await self.repo.create(data)
+        payload = dict(data)
+        if payload.get("tenant_id") is None and self.tenant_id is not None:
+            payload["tenant_id"] = self.tenant_id
+        lead = await self.repo.create(payload)
         logger.info(f"lead_action=create lead_id={lead.id} source={lead.source}")
         topic_id = None
         if self.group_id:
@@ -143,7 +153,7 @@ class LeadService:
         return lead
 
     async def clone_lead(self, lead_id: int) -> Lead | None:
-        lead = await self.repo.get_by_id(lead_id)
+        lead = await self.repo.get_by_id(lead_id, tenant_id=self.tenant_id)
         if not lead:
             return None
 
@@ -187,8 +197,13 @@ class LeadService:
         author: str,
         target_ref: MessageRef | None,
     ):
-        await self.repo.add_comment(lead_id=lead_id, text=text, author=author)
-        lead = await self.repo.get_by_id(lead_id)
+        await self.repo.add_comment(
+            lead_id=lead_id,
+            text=text,
+            author=author,
+            tenant_id=self.tenant_id,
+        )
+        lead = await self.repo.get_by_id(lead_id, tenant_id=self.tenant_id)
         if not lead:
             return
 
@@ -237,7 +252,7 @@ class LeadService:
         )
 
     async def refresh_card(self, lead_id: int):
-        lead = await self.repo.get_by_id(lead_id)
+        lead = await self.repo.get_by_id(lead_id, tenant_id=self.tenant_id)
         if not lead:
             return
 
@@ -301,7 +316,7 @@ class LeadService:
     async def _post_card(self, lead: Lead, topic_id: int) -> MessageRef | None:
         if not self.group_id:
             return None
-        lead_full = await self.repo.get_by_id(lead.id)
+        lead_full = await self.repo.get_by_id(lead.id, tenant_id=self.tenant_id)
         if not lead_full:
             return None
         text, keyboard = self._build_card_payload(lead_full)
@@ -330,7 +345,7 @@ class LeadService:
         *,
         action: str,
     ):
-        lead_full = await self.repo.get_by_id(lead.id)
+        lead_full = await self.repo.get_by_id(lead.id, tenant_id=self.tenant_id)
         if not lead_full:
             return
 
@@ -341,6 +356,7 @@ class LeadService:
             )
             return
         archive_text = format_archive_card(lead_full)
+        old_active = await self.repo.get_active_card_message(lead_full.id)
 
         if source_ref is None:
             source_ref = await self._resolve_active_ref(lead_full)
@@ -372,7 +388,22 @@ class LeadService:
                 f"lead_post lead_id={lead_full.id} action={action} target_topic={target_topic} ref={post_ref} ok=True"
             )
         else:
-            await self.repo.clear_active_card_message(lead_full.id)
-            logger.warning(
-                f"lead_post lead_id={lead_full.id} action={action} target_topic={target_topic} ok=False"
+            if old_active:
+                current_active = await self.repo.get_active_card_message(lead_full.id)
+                is_old_active = (
+                    current_active is not None
+                    and current_active.chat_id == old_active.chat_id
+                    and current_active.topic_id == old_active.topic_id
+                    and current_active.message_id == old_active.message_id
+                )
+                if not is_old_active:
+                    await self.repo.set_active_card_message(
+                        lead_id=lead_full.id,
+                        chat_id=old_active.chat_id,
+                        topic_id=old_active.topic_id,
+                        message_id=old_active.message_id,
+                    )
+            logger.error(
+                f"lead_post lead_id={lead_full.id} action={action} target_topic={target_topic} ok=False restored_old_ref={bool(old_active)}"
             )
+            raise RuntimeError(f"Failed to post new lead card for lead_id={lead_full.id}")

@@ -3,9 +3,11 @@ from __future__ import annotations
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import JSONResponse
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.rate_limit import limiter
 from app.api.deps import get_current_sender, verify_api_key
 from app.api.schemas.lead_schemas import (
     CreateLeadResponse,
@@ -15,7 +17,6 @@ from app.api.schemas.lead_schemas import (
     LeadResponse,
     LeadUpdateRequest,
     OkResponse,
-    TildaWebhookRequest,
 )
 from app.db.database import AsyncSessionLocal, get_db
 from app.db.models.lead import LeadStatus
@@ -144,6 +145,7 @@ def _parse_tilda(data: dict) -> dict:
 # ── POST /leads ───────────────────────────────────────────────────────────────
 
 @router.post("", response_model=CreateLeadResponse, status_code=201)
+@limiter.limit("60/minute")
 async def create_lead(
     body: LeadCreateRequest,
     request: Request,
@@ -152,6 +154,12 @@ async def create_lead(
     sender=Depends(get_current_sender),
 ):
     tenant = request.state.tenant
+    tenant_id = tenant.id if tenant else None
+    if tenant and not tenant.group_id:
+        return JSONResponse(
+            status_code=409,
+            content={"error": "group_not_configured"},
+        )
     if tenant and tenant.max_leads_per_month != -1:
         async with AsyncSessionLocal() as check_session:
             check_repo = TenantRepository(check_session)
@@ -167,7 +175,7 @@ async def create_lead(
             )
     repo = LeadRepository(db)
     group_id = tenant.group_id if tenant else 0
-    service = LeadService(repo, sender, group_id=group_id)
+    service = LeadService(repo, sender, group_id=group_id, tenant_id=tenant_id)
     lead = await service.create_lead(body.model_dump(exclude_none=True))
     return CreateLeadResponse(lead_id=lead.id, tg_message_id=lead.tg_message_id)
 
@@ -175,6 +183,7 @@ async def create_lead(
 # ── POST /leads/tilda — webhook для Tilda ─────────────────────────────────────
 
 @router.post("/tilda", response_model=OkResponse, status_code=201, tags=["Integrations"])
+@limiter.limit("60/minute")
 async def tilda_webhook(
     request: Request,
     db: AsyncSession = Depends(get_db),
@@ -203,9 +212,23 @@ async def tilda_webhook(
     logger.info(f"tilda_webhook parsed: name={lead_data['name']!r} phone={lead_data['phone']!r} service={lead_data['service']!r}")
 
     tenant = request.state.tenant
+    if tenant and tenant.max_leads_per_month != -1:
+        async with AsyncSessionLocal() as check_session:
+            check_repo = TenantRepository(check_session)
+            new_count = await check_repo.increment_leads_count(tenant.id)
+            await check_session.commit()
+        if new_count > tenant.max_leads_per_month:
+            raise HTTPException(
+                status_code=429,
+                detail=(
+                    f"Достигнут лимит {tenant.max_leads_per_month} заявок в месяц. "
+                    "Перейдите на тариф Базовый для снятия ограничений."
+                ),
+            )
     repo = LeadRepository(db)
     group_id = tenant.group_id if tenant else 0
-    service = LeadService(repo, sender, group_id=group_id)
+    tenant_id = tenant.id if tenant else None
+    service = LeadService(repo, sender, group_id=group_id, tenant_id=tenant_id)
     await service.create_lead({k: v for k, v in lead_data.items() if v is not None})
     return OkResponse()
 
@@ -214,6 +237,7 @@ async def tilda_webhook(
 
 @router.get("", response_model=LeadListResponse)
 async def get_leads(
+    request: Request,
     status: LeadStatus | None = Query(None),
     source: str | None = Query(None),
     manager_id: int | None = Query(None),
@@ -225,6 +249,8 @@ async def get_leads(
     db: AsyncSession = Depends(get_db),
     _: None = Depends(verify_api_key),
 ):
+    tenant = request.state.tenant
+    tenant_id = tenant.id if tenant else None
     repo = LeadRepository(db)
     leads, total = await repo.get_list(
         status=status,
@@ -235,6 +261,7 @@ async def get_leads(
         search=search,
         page=page,
         per_page=per_page,
+        tenant_id=tenant_id,
     )
     return LeadListResponse(
         total=total,
@@ -249,11 +276,14 @@ async def get_leads(
 @router.get("/{lead_id}", response_model=LeadResponse)
 async def get_lead(
     lead_id: int,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     _: None = Depends(verify_api_key),
 ):
+    tenant = request.state.tenant
+    tenant_id = tenant.id if tenant else None
     repo = LeadRepository(db)
-    lead = await repo.get_by_id(lead_id)
+    lead = await repo.get_by_id(lead_id, tenant_id=tenant_id)
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
     return LeadResponse.model_validate(lead)
@@ -270,23 +300,27 @@ async def update_lead(
     _: None = Depends(verify_api_key),
     sender=Depends(get_current_sender),
 ):
+    tenant = request.state.tenant
+    tenant_id = tenant.id if tenant else None
     repo = LeadRepository(db)
-    lead = await repo.get_by_id(lead_id)
+    lead = await repo.get_by_id(lead_id, tenant_id=tenant_id)
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
     if body.status:
-        tenant = request.state.tenant
         group_id = tenant.group_id if tenant else 0
-        service = LeadService(repo, sender, group_id=group_id)
+        service = LeadService(repo, sender, group_id=group_id, tenant_id=tenant_id)
         manager_tg_id = body.manager_tg_id
+        result = None
         if body.status == LeadStatus.IN_PROGRESS:
-            await service.take_in_progress(lead_id, manager_tg_id, None)
+            result = await service.take_in_progress(lead_id, manager_tg_id, None)
         elif body.status == LeadStatus.PAID:
-            await service.mark_paid(lead_id, manager_tg_id, body.amount, None)
+            result = await service.mark_paid(lead_id, manager_tg_id, body.amount, None)
         elif body.status == LeadStatus.SUCCESS:
-            await service.mark_success(lead_id, manager_tg_id, None)
+            result = await service.mark_success(lead_id, manager_tg_id, None)
         elif body.status == LeadStatus.REJECTED:
-            await service.reject_lead(lead_id, manager_tg_id, body.reject_reason or "", None)
+            result = await service.reject_lead(lead_id, manager_tg_id, body.reject_reason or "", None)
+        if not result:
+            return JSONResponse(status_code=409, content={"error": "invalid_transition"})
     return OkResponse()
 
 
@@ -301,13 +335,14 @@ async def add_comment(
     _: None = Depends(verify_api_key),
     sender=Depends(get_current_sender),
 ):
+    tenant = request.state.tenant
+    tenant_id = tenant.id if tenant else None
     repo = LeadRepository(db)
-    lead = await repo.get_by_id(lead_id)
+    lead = await repo.get_by_id(lead_id, tenant_id=tenant_id)
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
-    tenant = request.state.tenant
     group_id = tenant.group_id if tenant else 0
-    service = LeadService(repo, sender, group_id=group_id)
+    service = LeadService(repo, sender, group_id=group_id, tenant_id=tenant_id)
     await service.add_comment(
         lead_id=lead_id,
         text=body.text,
