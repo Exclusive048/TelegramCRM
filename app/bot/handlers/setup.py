@@ -12,6 +12,7 @@ from app.bot.handlers.panel import ensure_panel_message
 from app.bot.topic_cache import invalidate as invalidate_topic_cache
 from app.bot.topic_resolver import resolve_topic_thread_id
 from app.bot.topics import STATUS_TO_TOPIC_KEY, TOPIC_SPECS, TopicKey
+from app.bot.utils.callback_parser import safe_parse
 from app.core.config import settings
 from app.core.permissions import is_tg_admin
 from app.db.database import AsyncSessionLocal
@@ -53,16 +54,22 @@ async def _probe_topic_thread(sender: TelegramSafeSender, chat_id: int, thread_i
     return True
 
 
-async def _ensure_owner_registered(user_id: int, full_name: str, username: str | None):
+async def _ensure_owner_registered(
+    user_id: int,
+    full_name: str,
+    username: str | None,
+    tenant_id: int | None = None,
+):
     async with AsyncSessionLocal() as session:
         repo = LeadRepository(session)
-        existing = await repo.get_manager_by_tg_id(user_id)
+        existing = await repo.get_manager_by_tg_id(user_id, tenant_id=tenant_id)
         if not existing:
             await repo.create_manager(
                 tg_id=user_id,
                 name=full_name,
                 username=username,
                 role=ManagerRole.ADMIN,
+                tenant_id=tenant_id,
             )
             await session.commit()
             logger.info(f"Auto-registered owner as admin: {full_name} (tg_id={user_id})")
@@ -178,7 +185,11 @@ async def handle_company_name(message: Message, state: FSMContext, sender: Teleg
 
 @router.callback_query(F.data.startswith("reg:trial:"))
 async def cb_reg_trial(callback: CallbackQuery, sender: TelegramSafeSender):
-    tenant_id = int(callback.data.split(":")[2])
+    parsed = safe_parse(callback.data, expected_parts=3, expected_types=(str, str, int))
+    if not parsed:
+        await callback.answer("⚠️ Некорректный callback.", show_alert=True)
+        return
+    _, _, tenant_id = parsed
     async with AsyncSessionLocal() as session:
         from app.db.repositories.tenant_repository import TenantRepository
         from master_bot.notify import notify_admin
@@ -205,7 +216,11 @@ async def cb_reg_trial(callback: CallbackQuery, sender: TelegramSafeSender):
 
 @router.callback_query(F.data.startswith("reg:pay:"))
 async def cb_reg_pay(callback: CallbackQuery, sender: TelegramSafeSender):
-    tenant_id = int(callback.data.split(":")[2])
+    parsed = safe_parse(callback.data, expected_parts=3, expected_types=(str, str, int))
+    if not parsed:
+        await callback.answer("⚠️ Некорректный callback.", show_alert=True)
+        return
+    _, _, tenant_id = parsed
     await callback.answer()
     payment_url = await _create_yukassa_payment(tenant_id)
     if not payment_url:
@@ -302,6 +317,7 @@ async def cmd_setup(message: Message, sender: TelegramSafeSender):
             message.from_user.id,
             message.from_user.full_name,
             message.from_user.username,
+            tenant_id=target_tenant.id if target_tenant else None,
         )
 
     progress = await sender.send_ephemeral_text(
@@ -468,7 +484,10 @@ async def cmd_add_manager(message: Message, sender: TelegramSafeSender, tenant=N
 
     async with AsyncSessionLocal() as session:
         repo = LeadRepository(session)
-        existing = await repo.get_manager_by_tg_id(target.id)
+        existing = await repo.get_manager_by_tg_id(
+            target.id,
+            tenant_id=tenant.id if tenant else None,
+        )
 
         if existing:
             if existing.is_active:
@@ -553,7 +572,11 @@ async def cmd_make_admin(message: Message, sender: TelegramSafeSender, tenant=No
 
     async with AsyncSessionLocal() as session:
         repo = LeadRepository(session)
-        manager = await repo.set_manager_role(target.id, ManagerRole.ADMIN)
+        manager = await repo.set_manager_role(
+            target.id,
+            ManagerRole.ADMIN,
+            tenant_id=tenant.id if tenant else None,
+        )
         if not manager:
             manager = await repo.create_manager(
                 tg_id=target.id,
@@ -616,7 +639,10 @@ async def cmd_remove_manager(message: Message, sender: TelegramSafeSender, tenan
 
     async with AsyncSessionLocal() as session:
         repo = LeadRepository(session)
-        ok = await repo.deactivate_manager(target.id)
+        ok = await repo.deactivate_manager(
+            target.id,
+            tenant_id=tenant.id if tenant else None,
+        )
         await session.commit()
 
     if ok:

@@ -61,9 +61,12 @@ ManagerRoleEnum = pg_enum(ManagerRole, name="managerrole")
 
 class Manager(Base):
     __tablename__ = "managers"
+    __table_args__ = (
+        Index("uq_managers_tenant_tg_id", "tenant_id", "tg_id", unique=True),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    tg_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
+    tg_id: Mapped[int] = mapped_column(BigInteger, index=True)
     name: Mapped[str] = mapped_column(String(255))
     tg_username: Mapped[str | None] = mapped_column(String(100), nullable=True)
     tenant_id: Mapped[int | None] = mapped_column(
@@ -78,6 +81,9 @@ class Manager(Base):
     )
 
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    owner_trial_used: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, server_default="false"
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     leads: Mapped[list["Lead"]] = relationship("Lead", back_populates="manager")

@@ -54,9 +54,13 @@ async def is_tg_admin(sender: TelegramSafeSender, chat_id: int, user_id: int) ->
     return status in (ChatMemberStatus.CREATOR, ChatMemberStatus.ADMINISTRATOR)
 
 
-async def get_manager(repo: LeadRepository, tg_id: int) -> Manager | None:
+async def get_manager(
+    repo: LeadRepository,
+    tg_id: int,
+    tenant_id: int | None = None,
+) -> Manager | None:
     """Получить менеджера из БД"""
-    return await repo.get_manager_by_tg_id(tg_id)
+    return await repo.get_manager_by_tg_id(tg_id, tenant_id=tenant_id)
 
 
 async def is_any_manager(repo: LeadRepository, tg_id: int) -> bool:
@@ -78,9 +82,11 @@ async def is_crm_admin(
     """
     if not await is_tg_admin(sender, chat_id, tg_id):
         return False
-    m = await get_manager(repo, tg_id)
+    m = await get_manager(repo, tg_id, tenant_id=tenant_id)
     if m is None or not m.is_active:
         return False
-    if tenant_id is not None and m.tenant_id not in (tenant_id, None):
+    if tenant_id is None:
+        return False
+    if m.tenant_id != tenant_id:
         return False
     return m.role == ManagerRole.ADMIN

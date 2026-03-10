@@ -180,9 +180,11 @@ class ReminderService:
         async with AsyncSessionLocal() as session:
             repo = LeadRepository(session)
             now = datetime.now(timezone.utc)
-            due_reminders = await repo.get_pending_reminders(due_before_now=True, stale_after_seconds=0)
-            for reminder in due_reminders:
-                group_id = await repo.get_group_id_for_lead(reminder.lead_id)
+            due_reminders = await repo.get_pending_reminders_with_group_id(
+                due_before_now=True,
+                stale_after_seconds=0,
+            )
+            for reminder, group_id in due_reminders:
                 _schedule_job(
                     reminder.id,
                     reminder.remind_at,
@@ -192,9 +194,10 @@ class ReminderService:
                     immediate=True,
                 )
 
-            future_reminders = await repo.get_pending_reminders(stale_after_seconds=0)
-            for reminder in future_reminders:
-                group_id = await repo.get_group_id_for_lead(reminder.lead_id)
+            future_reminders = await repo.get_pending_reminders_with_group_id(
+                stale_after_seconds=0,
+            )
+            for reminder, group_id in future_reminders:
                 _schedule_job(reminder.id, reminder.remind_at, sender, group_id=group_id, now=now)
 
             logger.info(

@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import case, select, update, func
+from sqlalchemy import select, update, func
 from sqlalchemy.orm import selectinload
 from app.db.models.lead import (
     Lead,
@@ -486,6 +486,37 @@ class LeadRepository:
         )
         return result.scalars().all()
 
+    async def get_pending_reminders_with_group_id(
+        self,
+        *,
+        due_before_now: bool = False,
+        stale_after_seconds: int = 300,
+    ) -> list[tuple[Reminder, int | None]]:
+        now = datetime.now(timezone.utc)
+        stale_before = _naive(now) - timedelta(seconds=stale_after_seconds)
+        query = (
+            select(Reminder, Tenant.group_id)
+            .join(Lead, Lead.id == Reminder.lead_id)
+            .outerjoin(Tenant, Tenant.id == Lead.tenant_id)
+            .where(
+                Reminder.is_sent == False,
+                (
+                    (Reminder.is_processing == False)
+                    | (Reminder.processing_started_at.is_(None))
+                    | (Reminder.processing_started_at <= stale_before)
+                ),
+            )
+        )
+        if due_before_now:
+            query = query.where(Reminder.remind_at <= now)
+        else:
+            query = query.where(Reminder.remind_at > now)
+        result = await self.session.execute(
+            query.order_by(Reminder.remind_at.asc())
+        )
+        rows = result.all()
+        return [(reminder, group_id) for reminder, group_id in rows]
+
     async def get_active_reminder(self, lead_id: int) -> Reminder | None:
         now = datetime.now(timezone.utc)
         result = await self.session.execute(
@@ -614,27 +645,27 @@ class LeadRepository:
         tg_id: int,
         tenant_id: int | None = None,
     ) -> Manager | None:
-        query = select(Manager).where(Manager.tg_id == tg_id, Manager.is_active == True)
-        if tenant_id is not None:
-            query = (
-                query.where(
-                    (Manager.tenant_id == tenant_id) | (Manager.tenant_id.is_(None))
-                )
-                .order_by(
-                    case(
-                        (Manager.tenant_id == tenant_id, 0),
-                        else_=1,
-                    )
-                )
-            )
-        result = await self.session.execute(query)
-        return result.scalar_one_or_none()
-
-    async def get_manager_by_tg_id_any(self, tg_id: int) -> Manager | None:
-        result = await self.session.execute(
-            select(Manager).where(Manager.tg_id == tg_id)
+        query = select(Manager).where(
+            Manager.tg_id == tg_id,
+            Manager.is_active == True,
         )
-        return result.scalar_one_or_none()
+        if tenant_id is not None:
+            query = query.where(Manager.tenant_id == tenant_id)
+        query = query.order_by(Manager.id.desc())
+        result = await self.session.execute(query)
+        return result.scalars().first()
+
+    async def get_manager_by_tg_id_any(
+        self,
+        tg_id: int,
+        tenant_id: int | None = None,
+    ) -> Manager | None:
+        query = select(Manager).where(Manager.tg_id == tg_id)
+        if tenant_id is not None:
+            query = query.where(Manager.tenant_id == tenant_id)
+        query = query.order_by(Manager.id.desc())
+        result = await self.session.execute(query)
+        return result.scalars().first()
 
     async def get_all_managers(self, include_inactive: bool = False, tenant_id: int | None = None) -> list[Manager]:
         query = select(Manager)
@@ -682,7 +713,10 @@ class LeadRepository:
         role: ManagerRole = ManagerRole.MANAGER,
         tenant_id: int | None = None,
     ) -> Manager:
-        existing = await self.get_manager_by_tg_id_any(tg_id)
+        existing = await self.get_manager_by_tg_id_any(
+            tg_id,
+            tenant_id=tenant_id,
+        )
         if existing:
             existing.name = name
             if username:
@@ -704,19 +738,42 @@ class LeadRepository:
             tenant_id=tenant_id,
         )
 
-    async def set_manager_role(self, tg_id: int, role: ManagerRole) -> Manager | None:
-        manager = await self.get_manager_by_tg_id(tg_id)
+    async def set_manager_role(
+        self,
+        tg_id: int,
+        role: ManagerRole,
+        tenant_id: int | None = None,
+    ) -> Manager | None:
+        manager = await self.get_manager_by_tg_id(tg_id, tenant_id=tenant_id)
         if not manager:
             return None
         manager.role = role
         await self.session.flush()
         return manager
 
-    async def deactivate_manager(self, tg_id: int) -> bool:
-        manager = await self.get_manager_by_tg_id(tg_id)
+    async def deactivate_manager(self, tg_id: int, tenant_id: int | None = None) -> bool:
+        manager = await self.get_manager_by_tg_id(tg_id, tenant_id=tenant_id)
         if not manager:
             return False
         manager.is_active = False
+        now = datetime.now(timezone.utc)
+        reminders_query = [
+            Reminder.manager_tg_id == tg_id,
+            Reminder.is_sent == False,
+            Reminder.remind_at > _naive(now),
+        ]
+        if tenant_id is not None:
+            tenant_leads_subquery = select(Lead.id).where(Lead.tenant_id == tenant_id)
+            reminders_query.append(Reminder.lead_id.in_(tenant_leads_subquery))
+        await self.session.execute(
+            update(Reminder)
+            .where(*reminders_query)
+            .values(
+                is_sent=True,
+                is_processing=False,
+                processing_started_at=None,
+            )
+        )
         await self.session.flush()
         return True
 

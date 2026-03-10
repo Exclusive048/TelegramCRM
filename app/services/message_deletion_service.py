@@ -47,7 +47,7 @@ class MessageDeletionService:
         if self._task is not None:
             return
         self._sender = sender
-        self._task = asyncio.create_task(self._run_loop())
+        self._task = asyncio.create_task(self._run_forever())
         logger.info("message_deletion_service_started redis={}", bool(self._redis))
 
     async def stop(self) -> None:
@@ -104,17 +104,26 @@ class MessageDeletionService:
             delete_at,
         )
 
+    async def _run_forever(self) -> None:
+        while True:
+            try:
+                await self._run_loop()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception(
+                    "message_deletion_service_loop_crashed; restarting in 5s"
+                )
+                await asyncio.sleep(5)
+
     async def _run_loop(self) -> None:
-        try:
-            while True:
-                now = time.time()
-                if self._redis is not None:
-                    await self._drain_redis(now)
-                else:
-                    await self._drain_memory(now)
-                await asyncio.sleep(self._poll_interval)
-        except asyncio.CancelledError:
-            return
+        while True:
+            now = time.time()
+            if self._redis is not None:
+                await self._drain_redis(now)
+            else:
+                await self._drain_memory(now)
+            await asyncio.sleep(self._poll_interval)
 
     async def _drain_redis(self, now: float) -> None:
         if self._sender is None or self._redis is None:

@@ -1,4 +1,5 @@
 import json
+from decimal import Decimal, InvalidOperation
 
 import httpx
 from fastapi import APIRouter, Request
@@ -14,18 +15,25 @@ router = APIRouter(prefix="/webhook", tags=["Webhooks"])
 IS_DEV_MODE = bool(getattr(settings, "debug", False))
 
 
-async def _verify_yukassa_payment(yukassa_id: str) -> bool:
-    """Verify payment status via YooKassa API."""
+def _parse_amount(value: object) -> Decimal | None:
+    try:
+        return Decimal(str(value)).quantize(Decimal("0.01"))
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+
+
+async def _verify_yukassa_payment(yukassa_id: str) -> dict | None:
+    """Verify payment status via YooKassa API and return payment payload."""
     if not settings.yukassa_shop_id or not settings.yukassa_secret_key:
         if IS_DEV_MODE:
             logger.warning(
                 f"yukassa verify skipped in dev mode: missing credentials, payment={yukassa_id}"
             )
-            return True
+            return {"status": "succeeded"}
         logger.error(
             f"yukassa verify failed closed: missing credentials in non-dev mode, payment={yukassa_id}"
         )
-        return False
+        return None
 
     try:
         async with httpx.AsyncClient(timeout=10) as client:
@@ -37,23 +45,20 @@ async def _verify_yukassa_payment(yukassa_id: str) -> bool:
             logger.error(
                 f"yukassa verify failed: payment={yukassa_id} status_code={response.status_code}"
             )
-            return False
+            return None
         data = response.json()
-        is_valid = data.get("status") == "succeeded"
-        if not is_valid:
+        if data.get("status") != "succeeded":
             logger.warning(
                 f"yukassa verify rejected: payment={yukassa_id} status={data.get('status')}"
             )
-        return is_valid
+            return None
+        return data
     except Exception as e:
         logger.error(f"yukassa verify exception: payment={yukassa_id} error={e}")
-        return False
+        return None
 
 
 def _request_ip(request: Request) -> str:
-    forwarded_for = request.headers.get("x-forwarded-for")
-    if forwarded_for:
-        return forwarded_for.split(",")[0].strip()
     if request.client and request.client.host:
         return request.client.host
     return ""
@@ -91,8 +96,8 @@ async def yukassa_webhook(request: Request):
         logger.warning("yukassa webhook rejected: missing payment id")
         return {"status": "ok"}
 
-    is_real = await _verify_yukassa_payment(yukassa_id)
-    if not is_real:
+    verified_payment = await _verify_yukassa_payment(yukassa_id)
+    if not verified_payment:
         logger.warning(f"yukassa webhook rejected by verify: payment={yukassa_id}")
         return {"status": "ok"}
 
@@ -105,6 +110,44 @@ async def yukassa_webhook(request: Request):
             if not payment:
                 logger.warning(
                     f"yukassa webhook ignored: payment row not found, payment={yukassa_id}"
+                )
+                return {"status": "ok"}
+
+            amount_data = verified_payment.get("amount") if isinstance(verified_payment, dict) else {}
+            payment_amount = _parse_amount(amount_data.get("value") if isinstance(amount_data, dict) else None)
+            db_amount = _parse_amount(payment.amount)
+            expected_amount = _parse_amount(settings.subscription_price)
+            currency = (amount_data.get("currency") if isinstance(amount_data, dict) else "") or ""
+            metadata = verified_payment.get("metadata") if isinstance(verified_payment, dict) else {}
+            metadata_tenant_raw = metadata.get("tenant_id") if isinstance(metadata, dict) else None
+            try:
+                metadata_tenant_id = int(metadata_tenant_raw)
+            except (TypeError, ValueError):
+                metadata_tenant_id = None
+
+            if payment_amount is None or db_amount is None or expected_amount is None:
+                logger.warning(
+                    f"yukassa webhook rejected: invalid amount format payment={yukassa_id}"
+                )
+                return {"status": "ok"}
+            if payment_amount != expected_amount:
+                logger.warning(
+                    f"yukassa webhook rejected: amount mismatch with plan payment={yukassa_id} got={payment_amount} expected={expected_amount}"
+                )
+                return {"status": "ok"}
+            if payment_amount != db_amount:
+                logger.warning(
+                    f"yukassa webhook rejected: amount mismatch with db payment={yukassa_id} got={payment_amount} db={db_amount}"
+                )
+                return {"status": "ok"}
+            if currency.upper() != "RUB":
+                logger.warning(
+                    f"yukassa webhook rejected: currency mismatch payment={yukassa_id} currency={currency!r}"
+                )
+                return {"status": "ok"}
+            if metadata_tenant_id != payment.tenant_id:
+                logger.warning(
+                    f"yukassa webhook rejected: tenant metadata mismatch payment={yukassa_id} metadata_tenant_id={metadata_tenant_id} db_tenant_id={payment.tenant_id}"
                 )
                 return {"status": "ok"}
 
