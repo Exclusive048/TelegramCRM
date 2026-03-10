@@ -9,6 +9,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import select, func, update
 
 from app.core.config import settings
+from app.bot.utils.callback_parser import safe_parse
 from app.db.database import AsyncSessionLocal
 from app.db.models.tenant import Tenant
 from app.db.repositories.tenant_repository import TenantRepository
@@ -109,7 +110,11 @@ async def cb_clients_page(callback: CallbackQuery):
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔️ Нет доступа.", show_alert=True)
         return
-    page = int(callback.data.split(":")[2])
+    parsed = safe_parse(callback.data, expected_parts=3, expected_types=(str, str, int))
+    if not parsed:
+        await callback.answer("⚠️ Некорректный callback.", show_alert=True)
+        return
+    _, _, page = parsed
     await callback.answer()
     await _show_clients_page(callback.message, page=page, edit=True)
 
@@ -254,7 +259,11 @@ async def cb_adm_detail(callback: CallbackQuery):
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔️ Нет доступа.", show_alert=True)
         return
-    tenant_id = int(callback.data.split(":")[2])
+    parsed = safe_parse(callback.data, expected_parts=3, expected_types=(str, str, int))
+    if not parsed:
+        await callback.answer("⚠️ Некорректный callback.", show_alert=True)
+        return
+    _, _, tenant_id = parsed
     async with AsyncSessionLocal() as session:
         repo = TenantRepository(session)
         tenant = await repo.get_by_id(tenant_id)
@@ -276,7 +285,11 @@ async def cb_adm_block(callback: CallbackQuery):
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔️ Нет доступа.", show_alert=True)
         return
-    tenant_id = int(callback.data.split(":")[2])
+    parsed = safe_parse(callback.data, expected_parts=3, expected_types=(str, str, int))
+    if not parsed:
+        await callback.answer("⚠️ Некорректный callback.", show_alert=True)
+        return
+    _, _, tenant_id = parsed
     async with AsyncSessionLocal() as session:
         await session.execute(
             update(Tenant).where(Tenant.id == tenant_id).values(is_active=False)
@@ -302,7 +315,11 @@ async def cb_adm_unblock(callback: CallbackQuery):
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔️ Нет доступа.", show_alert=True)
         return
-    tenant_id = int(callback.data.split(":")[2])
+    parsed = safe_parse(callback.data, expected_parts=3, expected_types=(str, str, int))
+    if not parsed:
+        await callback.answer("⚠️ Некорректный callback.", show_alert=True)
+        return
+    _, _, tenant_id = parsed
     async with AsyncSessionLocal() as session:
         await session.execute(
             update(Tenant).where(Tenant.id == tenant_id).values(is_active=True)
@@ -329,7 +346,11 @@ async def cb_adm_trial(callback: CallbackQuery):
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔️ Нет доступа.", show_alert=True)
         return
-    tenant_id = int(callback.data.split(":")[2])
+    parsed = safe_parse(callback.data, expected_parts=3, expected_types=(str, str, int))
+    if not parsed:
+        await callback.answer("⚠️ Некорректный callback.", show_alert=True)
+        return
+    _, _, tenant_id = parsed
     async with AsyncSessionLocal() as session:
         repo = TenantRepository(session)
         tenant = await repo.get_by_id(tenant_id)
@@ -361,7 +382,11 @@ async def cb_adm_extend(callback: CallbackQuery):
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔️ Нет доступа.", show_alert=True)
         return
-    tenant_id = int(callback.data.split(":")[2])
+    parsed = safe_parse(callback.data, expected_parts=3, expected_types=(str, str, int))
+    if not parsed:
+        await callback.answer("⚠️ Некорректный callback.", show_alert=True)
+        return
+    _, _, tenant_id = parsed
     async with AsyncSessionLocal() as session:
         repo = TenantRepository(session)
         new_until, api_key = await repo.activate_subscription(tenant_id, days=30)
@@ -389,7 +414,11 @@ async def cb_adm_msg(callback: CallbackQuery):
     if not is_admin(callback.from_user.id):
         await callback.answer("⛔️ Нет доступа.", show_alert=True)
         return
-    tenant_id = int(callback.data.split(":")[2])
+    parsed = safe_parse(callback.data, expected_parts=3, expected_types=(str, str, int))
+    if not parsed:
+        await callback.answer("⚠️ Некорректный callback.", show_alert=True)
+        return
+    _, _, tenant_id = parsed
     _pending_msg[callback.from_user.id] = tenant_id
     await callback.answer()
     builder = InlineKeyboardBuilder()

@@ -8,8 +8,14 @@
  * 
  * Для Tilda:
  *   Настройки сайта → Формы → После отправки → Webhook
- *   Вставьте URL: https://your-domain.com/api/v1/leads/tilda?apikey=YOUR_KEY
- *   (Tilda сама отправит данные, JS не нужен)
+ *   Вставьте URL: https://your-domain.com/api/v1/leads/tilda
+ *   И добавьте заголовок: X-API-Key: YOUR_KEY
+ *   Пример:
+ *   fetch('https://your-domain.com/api/v1/leads/tilda', {
+ *     method: 'POST',
+ *     headers: { 'X-API-Key': 'YOUR_KEY' },
+ *     body: formData
+ *   })
  * 
  * Для других сайтов — используйте код ниже:
  */

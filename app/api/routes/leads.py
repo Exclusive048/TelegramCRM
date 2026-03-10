@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from datetime import datetime
 
@@ -27,7 +27,7 @@ from app.services.lead_service import LeadService
 router = APIRouter(prefix="/leads", tags=["Leads"])
 MAX_EXTRA_KEYS = 20
 
-# Поля которые исключаем из extra (технические / мусор)
+# РџРѕР»СЏ РєРѕС‚РѕСЂС‹Рµ РёСЃРєР»СЋС‡Р°РµРј РёР· extra (С‚РµС…РЅРёС‡РµСЃРєРёРµ / РјСѓСЃРѕСЂ)
 _SKIP_EXTRA = {
     "Name", "name", "NAME",
     "Phone", "phone", "PHONE",
@@ -43,7 +43,7 @@ _SKIP_EXTRA = {
 
 
 def _pick(data: dict, *keys: str, default: str = "") -> str:
-    """Берёт первое непустое значение из списка ключей."""
+    """Р‘РµСЂС‘С‚ РїРµСЂРІРѕРµ РЅРµРїСѓСЃС‚РѕРµ Р·РЅР°С‡РµРЅРёРµ РёР· СЃРїРёСЃРєР° РєР»СЋС‡РµР№."""
     for k in keys:
         v = data.get(k)
         if v and str(v).strip():
@@ -53,23 +53,23 @@ def _pick(data: dict, *keys: str, default: str = "") -> str:
 
 def _parse_tilda(data: dict) -> dict:
     """
-    Универсальный парсер Tilda-форм.
-    Поддерживает стандартные поля (Name/Phone) и нестандартные
-    (messenger-id, program, city и т.д.).
+    РЈРЅРёРІРµСЂСЃР°Р»СЊРЅС‹Р№ РїР°СЂСЃРµСЂ Tilda-С„РѕСЂРј.
+    РџРѕРґРґРµСЂР¶РёРІР°РµС‚ СЃС‚Р°РЅРґР°СЂС‚РЅС‹Рµ РїРѕР»СЏ (Name/Phone) Рё РЅРµСЃС‚Р°РЅРґР°СЂС‚РЅС‹Рµ
+    (messenger-id, program, city Рё С‚.Рґ.).
     """
-    # ── Имя ───────────────────────────────────────────────────────────────────
-    name = _pick(data, "Name", "name", "NAME", "ФИО", "fio", "fullname")
+    # в”Ђв”Ђ РРјСЏ в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+    name = _pick(data, "Name", "name", "NAME", "Р¤РРћ", "fio", "fullname")
     if not name:
-        # Собираем из частей
+        # РЎРѕР±РёСЂР°РµРј РёР· С‡Р°СЃС‚РµР№
         parts = [
             _pick(data, "firstname", "Firstname", "first_name"),
             _pick(data, "lastname", "Lastname", "last_name"),
         ]
         name = " ".join(p for p in parts if p).strip()
     if not name:
-        name = _pick(data, "formname", "program", default="Заявка с сайта")
+        name = _pick(data, "formname", "program", default="Р—Р°СЏРІРєР° СЃ СЃР°Р№С‚Р°")
 
-    # ── Телефон / контакт ──────────────────────────────────────────────────────
+    # в”Ђв”Ђ РўРµР»РµС„РѕРЅ / РєРѕРЅС‚Р°РєС‚ в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
     phone = _pick(data, "Phone", "phone", "PHONE", "tel", "Tel", "telephone")
     if not phone:
         messenger_id = _pick(data, "messenger-id", "messenger_id")
@@ -78,47 +78,47 @@ def _parse_tilda(data: dict) -> dict:
             prefix = f"{messenger_type}: " if messenger_type else ""
             phone = f"{prefix}{messenger_id}"
     if not phone:
-        phone = _pick(data, "email", "Email", "EMAIL", default="—")
+        phone = _pick(data, "email", "Email", "EMAIL", default="вЂ”")
 
-    # ── Email ─────────────────────────────────────────────────────────────────
+    # в”Ђв”Ђ Email в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
     email = _pick(data, "email", "Email", "EMAIL") or None
 
-    # ── Услуга ────────────────────────────────────────────────────────────────
+    # в”Ђв”Ђ РЈСЃР»СѓРіР° в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
     service = _pick(data, "Service", "service", "program", "Program") or None
     if not service:
         formname = _pick(data, "formname")
         if formname:
             service = formname
 
-    # ── Комментарий ───────────────────────────────────────────────────────────
+    # в”Ђв”Ђ РљРѕРјРјРµРЅС‚Р°СЂРёР№ в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
     comment_parts = []
 
     explicit_comment = _pick(data, "Comment", "comment", "Message", "message", "Messages")
     if explicit_comment:
         comment_parts.append(explicit_comment)
 
-    # Добавляем гео/время если есть
+    # Р”РѕР±Р°РІР»СЏРµРј РіРµРѕ/РІСЂРµРјСЏ РµСЃР»Рё РµСЃС‚СЊ
     for field, label in [
-        ("city", "Город"),
-        ("City", "Город"),
-        ("country", "Страна"),
-        ("location", "Локация"),
-        ("time", "Время"),
+        ("city", "Р“РѕСЂРѕРґ"),
+        ("City", "Р“РѕСЂРѕРґ"),
+        ("country", "РЎС‚СЂР°РЅР°"),
+        ("location", "Р›РѕРєР°С†РёСЏ"),
+        ("time", "Р’СЂРµРјСЏ"),
     ]:
         val = data.get(field)
         if val and str(val).strip():
             comment_parts.append(f"{label}: {val}")
 
     if not comment_parts:
-        comment_parts.append("Заявка с Tilda")
+        comment_parts.append("Р—Р°СЏРІРєР° СЃ Tilda")
 
     comment = " | ".join(comment_parts)
 
-    # ── UTM ──────────────────────────────────────────────────────────────────
+    # в”Ђв”Ђ UTM в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
     utm_campaign = _pick(data, "utm_campaign", "UTM_CAMPAIGN") or None
     utm_source = _pick(data, "utm_source", "utm_medium") or None
 
-    # ── Extra — всё остальное полезное ────────────────────────────────────────
+    # в”Ђв”Ђ Extra вЂ” РІСЃС‘ РѕСЃС‚Р°Р»СЊРЅРѕРµ РїРѕР»РµР·РЅРѕРµ в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
     extra = {}
     for k, v in list(data.items()):
         if k in _SKIP_EXTRA:
@@ -142,51 +142,66 @@ def _parse_tilda(data: dict) -> dict:
     }
 
 
-# ── POST /leads ───────────────────────────────────────────────────────────────
+
+def _quota_limit_error(limit: int) -> HTTPException:
+    return HTTPException(
+        status_code=429,
+        detail=(
+            f"Достигнут лимит {limit} заявок в месяц. "
+            "Перейдите на тариф Базовый для снятия ограничений."
+        ),
+    )
+
+
+async def _create_lead_atomic(*, tenant, sender, payload: dict):
+    tenant_id = tenant.id if tenant else None
+    group_id = tenant.group_id if tenant else 0
+
+    async with AsyncSessionLocal() as session:
+        try:
+            if tenant and tenant.max_leads_per_month != -1:
+                tenant_repo = TenantRepository(session)
+                new_count = await tenant_repo.increment_leads_count(tenant.id)
+                if new_count > tenant.max_leads_per_month:
+                    raise _quota_limit_error(tenant.max_leads_per_month)
+
+            repo = LeadRepository(session)
+            service = LeadService(repo, sender, group_id=group_id, tenant_id=tenant_id)
+            lead = await service.create_lead(payload)
+            await session.commit()
+            return lead
+        except Exception:
+            await session.rollback()
+            raise
+# в”Ђв”Ђ POST /leads в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 @router.post("", response_model=CreateLeadResponse, status_code=201)
 @limiter.limit("60/minute")
 async def create_lead(
     body: LeadCreateRequest,
     request: Request,
-    db: AsyncSession = Depends(get_db),
     _: None = Depends(verify_api_key),
     sender=Depends(get_current_sender),
 ):
     tenant = request.state.tenant
-    tenant_id = tenant.id if tenant else None
     if tenant and not tenant.group_id:
         return JSONResponse(
             status_code=409,
             content={"error": "group_not_configured"},
         )
-    if tenant and tenant.max_leads_per_month != -1:
-        async with AsyncSessionLocal() as check_session:
-            check_repo = TenantRepository(check_session)
-            new_count = await check_repo.increment_leads_count(tenant.id)
-            await check_session.commit()
-        if new_count > tenant.max_leads_per_month:
-            raise HTTPException(
-                status_code=429,
-                detail=(
-                    f"Достигнут лимит {tenant.max_leads_per_month} заявок в месяц. "
-                    "Перейдите на тариф Базовый для снятия ограничений."
-                ),
-            )
-    repo = LeadRepository(db)
-    group_id = tenant.group_id if tenant else 0
-    service = LeadService(repo, sender, group_id=group_id, tenant_id=tenant_id)
-    lead = await service.create_lead(body.model_dump(exclude_none=True))
+    lead = await _create_lead_atomic(
+        tenant=tenant,
+        sender=sender,
+        payload=body.model_dump(exclude_none=True),
+    )
     return CreateLeadResponse(lead_id=lead.id, tg_message_id=lead.tg_message_id)
 
-
-# ── POST /leads/tilda — webhook для Tilda ─────────────────────────────────────
+# в”Ђв”Ђ POST /leads/tilda вЂ” webhook РґР»СЏ Tilda в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 @router.post("/tilda", response_model=OkResponse, status_code=201, tags=["Integrations"])
 @limiter.limit("60/minute")
 async def tilda_webhook(
     request: Request,
-    db: AsyncSession = Depends(get_db),
     _: None = Depends(verify_api_key),
     sender=Depends(get_current_sender),
 ):
@@ -212,28 +227,15 @@ async def tilda_webhook(
     logger.info(f"tilda_webhook parsed: name={lead_data['name']!r} phone={lead_data['phone']!r} service={lead_data['service']!r}")
 
     tenant = request.state.tenant
-    if tenant and tenant.max_leads_per_month != -1:
-        async with AsyncSessionLocal() as check_session:
-            check_repo = TenantRepository(check_session)
-            new_count = await check_repo.increment_leads_count(tenant.id)
-            await check_session.commit()
-        if new_count > tenant.max_leads_per_month:
-            raise HTTPException(
-                status_code=429,
-                detail=(
-                    f"Достигнут лимит {tenant.max_leads_per_month} заявок в месяц. "
-                    "Перейдите на тариф Базовый для снятия ограничений."
-                ),
-            )
-    repo = LeadRepository(db)
-    group_id = tenant.group_id if tenant else 0
-    tenant_id = tenant.id if tenant else None
-    service = LeadService(repo, sender, group_id=group_id, tenant_id=tenant_id)
-    await service.create_lead({k: v for k, v in lead_data.items() if v is not None})
+    await _create_lead_atomic(
+        tenant=tenant,
+        sender=sender,
+        payload={k: v for k, v in lead_data.items() if v is not None},
+    )
     return OkResponse()
 
 
-# ── GET /leads ────────────────────────────────────────────────────────────────
+# в”Ђв”Ђ GET /leads в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 @router.get("", response_model=LeadListResponse)
 async def get_leads(
@@ -271,7 +273,7 @@ async def get_leads(
     )
 
 
-# ── GET /leads/{id} ───────────────────────────────────────────────────────────
+# в”Ђв”Ђ GET /leads/{id} в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 @router.get("/{lead_id}", response_model=LeadResponse)
 async def get_lead(
@@ -289,7 +291,7 @@ async def get_lead(
     return LeadResponse.model_validate(lead)
 
 
-# ── PATCH /leads/{id} ────────────────────────────────────────────────────────
+# в”Ђв”Ђ PATCH /leads/{id} в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 @router.patch("/{lead_id}", response_model=OkResponse)
 async def update_lead(
@@ -323,8 +325,7 @@ async def update_lead(
             return JSONResponse(status_code=409, content={"error": "invalid_transition"})
     return OkResponse()
 
-
-# ── POST /leads/{id}/comment ──────────────────────────────────────────────────
+# в”Ђв”Ђ POST /leads/{id}/comment в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 @router.post("/{lead_id}/comment", response_model=OkResponse, status_code=201)
 async def add_comment(
@@ -350,3 +351,4 @@ async def add_comment(
         target_ref=None,
     )
     return OkResponse()
+

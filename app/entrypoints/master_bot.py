@@ -36,6 +36,24 @@ async def _set_master_commands(bot: Bot) -> None:
         )
 
 
+async def _resolve_storage_redis_enabled() -> bool:
+    if not settings.use_redis:
+        return False
+    try:
+        from redis.asyncio import Redis
+
+        client = Redis.from_url(settings.redis_url, decode_responses=True)
+        await client.ping()
+        await client.aclose()
+        return True
+    except Exception as exc:
+        logger.warning(
+            "Redis unavailable for master bot FSM storage; fallback to MemoryStorage: {}",
+            exc,
+        )
+        return False
+
+
 async def main() -> None:
     logger.info("Starting master bot process")
 
@@ -53,7 +71,11 @@ async def main() -> None:
 
     set_master_bot(bot)
 
-    storage = init_storage(use_redis=True, redis_url=settings.redis_url)
+    use_redis_storage = await _resolve_storage_redis_enabled()
+    storage = init_storage(
+        use_redis=use_redis_storage,
+        redis_url=settings.redis_url,
+    )
     dp = Dispatcher(storage=storage)
     dp.include_router(build_master_router())
 

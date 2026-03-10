@@ -373,6 +373,35 @@ async def handle_manager_contact(message: Message, state: FSMContext, sender: Te
                 pass
             return
 
+        if tenant and tenant.max_managers != -1:
+            current_count = await repo.count_active_managers(tenant_id=tenant.id)
+            if current_count >= tenant.max_managers:
+                text = (
+                    f"⚠️ В вашем плане максимум {tenant.max_managers} менеджеров ({tenant.plan}).\n"
+                    "Оплатите расширение или смените тариф."
+                )
+                keyboard = build_kb_panel_team_add_prompt()
+                if panel_message_id:
+                    await _safe_edit_panel_message(
+                        sender,
+                        repo,
+                        panel_chat_id,
+                        panel_topic_id,
+                        panel_message_id,
+                        text,
+                        keyboard,
+                    )
+                    await session.commit()
+                try:
+                    await sender.delete_message(
+                        chat_id=message.chat.id,
+                        message_id=message.message_id,
+                        thread_id=message.message_thread_id,
+                    )
+                except Exception:
+                    pass
+                return
+
         manager = await repo.upsert_manager_from_contact(
             tg_id=tg_id,
             name=name,

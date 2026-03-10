@@ -1,17 +1,18 @@
-from datetime import datetime, timedelta, timezone
+﻿from datetime import datetime, timedelta, timezone
 import secrets
 import string
 
-from sqlalchemy import select, update
+from sqlalchemy import exists, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.db.models.lead import Manager
 from app.db.models.tenant import Tenant, Payment
 from app.db.utils import _naive
 
 
 def _generate_referral_code() -> str:
-    """Генерирует короткий читаемый реферальный код: 8 символов A-Z0-9."""
+    """Р“РµРЅРµСЂРёСЂСѓРµС‚ РєРѕСЂРѕС‚РєРёР№ С‡РёС‚Р°РµРјС‹Р№ СЂРµС„РµСЂР°Р»СЊРЅС‹Р№ РєРѕРґ: 8 СЃРёРјРІРѕР»РѕРІ A-Z0-9."""
     alphabet = string.ascii_uppercase + string.digits
     return "".join(secrets.choice(alphabet) for _ in range(8))
 
@@ -27,7 +28,7 @@ class TenantRepository:
         return result.scalar_one_or_none()
 
     async def bind_group(self, tenant_id: int, group_id: int) -> None:
-        """Привязать группу к тенанту. Вызывается при /setup."""
+        """РџСЂРёРІСЏР·Р°С‚СЊ РіСЂСѓРїРїСѓ Рє С‚РµРЅР°РЅС‚Сѓ. Р’С‹Р·С‹РІР°РµС‚СЃСЏ РїСЂРё /setup."""
         await self.session.execute(
             update(Tenant).where(Tenant.id == tenant_id).values(
                 group_id=group_id
@@ -35,7 +36,7 @@ class TenantRepository:
         )
 
     async def complete_onboarding(self, tenant_id: int) -> None:
-        """Отметить что /setup выполнен успешно."""
+        """РћС‚РјРµС‚РёС‚СЊ С‡С‚Рѕ /setup РІС‹РїРѕР»РЅРµРЅ СѓСЃРїРµС€РЅРѕ."""
         await self.session.execute(
             update(Tenant).where(Tenant.id == tenant_id).values(
                 onboarding_completed=True
@@ -50,7 +51,7 @@ class TenantRepository:
         sla_new_hours: int | None = None,
         sla_in_progress_days: int | None = None,
     ) -> None:
-        """Установить лимиты при смене тарифа."""
+        """РЈСЃС‚Р°РЅРѕРІРёС‚СЊ Р»РёРјРёС‚С‹ РїСЂРё СЃРјРµРЅРµ С‚Р°СЂРёС„Р°."""
         values = {
             "max_leads_per_month": max_leads,
             "max_managers": max_managers,
@@ -65,9 +66,9 @@ class TenantRepository:
 
     async def increment_leads_count(self, tenant_id: int) -> int:
         """
-        Увеличить счётчик лидов за месяц.
-        Автоматически сбрасывает счётчик если наступил новый месяц.
-        Возвращает новое значение счётчика.
+        РЈРІРµР»РёС‡РёС‚СЊ СЃС‡С‘С‚С‡РёРє Р»РёРґРѕРІ Р·Р° РјРµСЃСЏС†.
+        РђРІС‚РѕРјР°С‚РёС‡РµСЃРєРё СЃР±СЂР°СЃС‹РІР°РµС‚ СЃС‡С‘С‚С‡РёРє РµСЃР»Рё РЅР°СЃС‚СѓРїРёР» РЅРѕРІС‹Р№ РјРµСЃСЏС†.
+        Р’РѕР·РІСЂР°С‰Р°РµС‚ РЅРѕРІРѕРµ Р·РЅР°С‡РµРЅРёРµ СЃС‡С‘С‚С‡РёРєР°.
         """
         from datetime import datetime, timezone
         tenant = await self.get_by_id(tenant_id)
@@ -75,7 +76,7 @@ class TenantRepository:
             return 0
         now = datetime.now(timezone.utc)
 
-        # Сброс счётчика если наступил новый месяц
+        # РЎР±СЂРѕСЃ СЃС‡С‘С‚С‡РёРєР° РµСЃР»Рё РЅР°СЃС‚СѓРїРёР» РЅРѕРІС‹Р№ РјРµСЃСЏС†
         if (tenant.leads_month_reset_at is None or
                 tenant.leads_month_reset_at.month != now.month or
                 tenant.leads_month_reset_at.year != now.year):
@@ -181,7 +182,7 @@ class TenantRepository:
         return await self.get_by_owner(owner_tg_id)
 
     async def _ensure_api_key(self, tenant_id: int) -> str:
-        """Генерирует API ключ если его ещё нет. Возвращает ключ."""
+        """Р“РµРЅРµСЂРёСЂСѓРµС‚ API РєР»СЋС‡ РµСЃР»Рё РµРіРѕ РµС‰С‘ РЅРµС‚. Р’РѕР·РІСЂР°С‰Р°РµС‚ РєР»СЋС‡."""
         tenant = await self.get_by_id(tenant_id)
         if tenant.api_key:
             return tenant.api_key
@@ -197,7 +198,10 @@ class TenantRepository:
         return key
 
     async def activate_trial(self, tenant_id: int, days: int = 14) -> str:
-        """Активирует пробный период. Возвращает api_key."""
+        """Activates a trial period and returns API key."""
+        tenant = await self.get_by_id(tenant_id)
+        if not tenant:
+            raise ValueError(f"Tenant not found: {tenant_id}")
         until = datetime.now(timezone.utc) + timedelta(days=days)
         await self.session.execute(
             update(Tenant).where(Tenant.id == tenant_id).values(
@@ -207,6 +211,11 @@ class TenantRepository:
                 subscription_until=_naive(until),
                 plan="trial",
             )
+        )
+        await self.session.execute(
+            update(Manager)
+            .where(Manager.tg_id == tenant.owner_tg_id)
+            .values(owner_trial_used=True)
         )
         from app.core.plans import get_plan_limits
         limits = get_plan_limits("trial")
@@ -219,8 +228,30 @@ class TenantRepository:
         )
         return await self._ensure_api_key(tenant_id)
 
+    async def has_owner_used_trial(self, owner_tg_id: int) -> bool:
+        manager_used = await self.session.scalar(
+            select(
+                exists().where(
+                    Manager.tg_id == owner_tg_id,
+                    Manager.owner_trial_used == True,
+                )
+            )
+        )
+        if bool(manager_used):
+            return True
+
+        tenant_used = await self.session.scalar(
+            select(
+                exists().where(
+                    Tenant.owner_tg_id == owner_tg_id,
+                    Tenant.trial_used == True,
+                )
+            )
+        )
+        return bool(tenant_used)
+
     async def activate_subscription(self, tenant_id: int, days: int = 30) -> tuple[datetime, str]:
-        """Продлевает подписку. Возвращает (новая_дата, api_key)."""
+        """РџСЂРѕРґР»РµРІР°РµС‚ РїРѕРґРїРёСЃРєСѓ. Р’РѕР·РІСЂР°С‰Р°РµС‚ (РЅРѕРІР°СЏ_РґР°С‚Р°, api_key)."""
         tenant = await self.get_by_id(tenant_id)
         now = datetime.now(timezone.utc)
         base = max(tenant.subscription_until or now, now)
@@ -287,7 +318,7 @@ class TenantRepository:
         return list(result.scalars().all())
 
     async def get_referral_stats(self, tenant_id: int) -> dict:
-        """Статистика рефералов для данного тенанта."""
+        """РЎС‚Р°С‚РёСЃС‚РёРєР° СЂРµС„РµСЂР°Р»РѕРІ РґР»СЏ РґР°РЅРЅРѕРіРѕ С‚РµРЅР°РЅС‚Р°."""
         result = await self.session.execute(
             select(Tenant).where(Tenant.referred_by_id == tenant_id)
         )
@@ -338,3 +369,4 @@ class TenantRepository:
             select(Payment).where(Payment.id == updated_id)
         )
         return result.scalar_one_or_none()
+

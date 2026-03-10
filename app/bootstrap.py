@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import uuid
 
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.base import BaseStorage
 from aiogram.fsm.storage.memory import MemoryStorage
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from loguru import logger
 from slowapi import _rate_limit_exceeded_handler
@@ -18,6 +19,25 @@ from app.api.routes import yukassa_webhook as yukassa_router
 from app.services.message_deletion_service import MessageDeletionService
 from app.telegram.safe_sender import ChatRateLimiter, TelegramSafeSender
 
+LEADS_BODY_LIMIT_BYTES = 512 * 1024
+YUKASSA_BODY_LIMIT_BYTES = 64 * 1024
+_BODY_LIMITS_BY_ROUTE: dict[tuple[str, str], int] = {
+    ("POST", "/api/v1/leads"): LEADS_BODY_LIMIT_BYTES,
+    ("POST", "/api/v1/leads/tilda"): LEADS_BODY_LIMIT_BYTES,
+    ("POST", "/api/v1/webhook/yukassa"): YUKASSA_BODY_LIMIT_BYTES,
+}
+
+
+def _normalize_path(path: str) -> str:
+    if path != "/" and path.endswith("/"):
+        return path.rstrip("/")
+    return path
+
+
+def _get_body_limit(request: Request) -> int | None:
+    key = (request.method.upper(), _normalize_path(request.url.path))
+    return _BODY_LIMITS_BY_ROUTE.get(key)
+
 
 def create_app(bot: Bot, sender: TelegramSafeSender, *, redis_url: str) -> FastAPI:
     app = FastAPI(docs_url="/api/docs", redoc_url=None, title="TelegramCRM API", version="1.0")
@@ -27,6 +47,48 @@ def create_app(bot: Bot, sender: TelegramSafeSender, *, redis_url: str) -> FastA
     app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
     app.include_router(leads_router.router, prefix="/api/v1")
     app.include_router(yukassa_router.router, prefix="/api/v1")
+
+    @app.middleware("http")
+    async def request_context_middleware(request: Request, call_next):
+        request_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex
+        request.state.request_id = request_id
+
+        body_limit = _get_body_limit(request)
+        if body_limit is not None:
+            raw_body = await request.body()
+            if len(raw_body) > body_limit:
+                response = JSONResponse(
+                    status_code=413,
+                    content={"error": "payload_too_large", "request_id": request_id},
+                )
+                response.headers["X-Request-ID"] = request_id
+                return response
+
+        response = await call_next(request)
+        response.headers["X-Request-ID"] = request_id
+        return response
+
+    @app.exception_handler(Exception)
+    async def unhandled_exception_handler(request: Request, exc: Exception):
+        request_id = getattr(request.state, "request_id", uuid.uuid4().hex)
+        tenant_id = getattr(request.state, "tenant_id", None)
+        if tenant_id is None:
+            tenant = getattr(request.state, "tenant", None)
+            tenant_id = getattr(tenant, "id", None)
+
+        logger.opt(exception=exc).error(
+            "Unhandled API error request_id={} method={} path={} tenant_id={}",
+            request_id,
+            request.method,
+            request.url.path,
+            tenant_id,
+        )
+        response = JSONResponse(
+            status_code=500,
+            content={"error": "internal_error", "request_id": request_id},
+        )
+        response.headers["X-Request-ID"] = request_id
+        return response
 
     @app.get("/health")
     async def health():
@@ -40,8 +102,12 @@ def create_app(bot: Bot, sender: TelegramSafeSender, *, redis_url: str) -> FastA
             await r.ping()
             await r.aclose()
             return {"status": "ok"}
-        except Exception as e:
-            return JSONResponse({"status": "error", "detail": str(e)}, status_code=503)
+        except Exception:
+            logger.exception("Health check failed")
+            return JSONResponse(
+                {"status": "error", "code": "db_unavailable"},
+                status_code=503,
+            )
 
     return app
 
