@@ -34,6 +34,7 @@ class CreateLeadState(StatesGroup):
     waiting_for_email = State()
     waiting_for_service = State()
     waiting_for_comment = State()
+    waiting_for_confirm = State()
 
 
 REJECT_REASON_LABELS = {
@@ -73,8 +74,8 @@ def _parse_custom_datetime(value: str) -> datetime | None:
     return None
 
 
-async def _get_manager(repo: LeadRepository, user_id: int):
-    return await repo.get_manager_by_tg_id(user_id)
+async def _get_manager(repo: LeadRepository, user_id: int, tenant_id: int | None = None):
+    return await repo.get_manager_by_tg_id(user_id, tenant_id=tenant_id)
 
 
 def _manager_can_act(manager, lead) -> bool:

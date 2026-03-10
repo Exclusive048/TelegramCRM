@@ -51,15 +51,16 @@ async def handle_lead_status_action(
     group_id = _get_group_id(tenant) or (callback.message.chat.id if callback.message.chat.id < 0 else None)
     if not group_id and callback.message:
         group_id = callback.message.chat.id
+    tenant_id = tenant.id if tenant else None
 
     async with AsyncSessionLocal() as session:
         repo = LeadRepository(session)
-        manager = await _get_manager(repo, callback.from_user.id)
+        manager = await _get_manager(repo, callback.from_user.id, tenant_id=tenant_id)
         if not manager:
             await sender.answer(callback, NO_ACCESS_TEXT, show_alert=True)
             return
 
-        service = LeadService(repo, sender, group_id=group_id)
+        service = LeadService(repo, sender, group_id=group_id, tenant_id=tenant_id)
 
         if action == "take":
             lead = await service.take_in_progress(lead_id, callback.from_user.id, source_ref)
@@ -68,7 +69,7 @@ async def handle_lead_status_action(
                 await sender.answer(callback, "✅ Заявка взята в работу.")
                 return
 
-            existing = await repo.get_by_id(lead_id)
+            existing = await repo.get_by_id(lead_id, tenant_id=tenant_id)
             if existing and existing.status != LeadStatus.NEW:
                 other_name = existing.manager.name if existing.manager else "другой менеджер"
                 if existing.manager and existing.manager.tg_id == callback.from_user.id:
@@ -81,18 +82,24 @@ async def handle_lead_status_action(
             return
 
         if action == "paid":
-            lead_for_access = await repo.get_by_id(lead_id)
+            lead_for_access = await repo.get_by_id(lead_id, tenant_id=tenant_id)
             if not lead_for_access or not _manager_can_act(manager, lead_for_access):
                 await sender.answer(callback, NO_ACCESS_TEXT, show_alert=True)
                 return
             await state.set_state(AmountState.waiting_for_amount)
             await state.update_data(lead_id=lead_id, message_ref=source_ref.to_dict() if source_ref else None)
             await sender.answer(callback)
-            await start_force_reply(callback, state, sender, "ℹ️ Введите сумму сделки (руб.):")
+            await start_force_reply(
+                callback,
+                state,
+                sender,
+                "ℹ️ Введите сумму сделки (руб.):",
+                lead_id=lead_id,
+            )
             return
 
         if action == "success":
-            lead_for_access = await repo.get_by_id(lead_id)
+            lead_for_access = await repo.get_by_id(lead_id, tenant_id=tenant_id)
             if not lead_for_access or not _manager_can_act(manager, lead_for_access):
                 await sender.answer(callback, NO_ACCESS_TEXT, show_alert=True)
                 return
@@ -105,7 +112,7 @@ async def handle_lead_status_action(
             return
 
         if action == "reject":
-            lead_for_access = await repo.get_by_id(lead_id)
+            lead_for_access = await repo.get_by_id(lead_id, tenant_id=tenant_id)
             if not lead_for_access or not _manager_can_act(manager, lead_for_access):
                 await sender.answer(callback, NO_ACCESS_TEXT, show_alert=True)
                 return
@@ -125,19 +132,24 @@ async def handle_lead_status_action(
             if len(parts) < 4:
                 await sender.answer(callback)
                 return
-            lead_for_access = await repo.get_by_id(lead_id)
+            lead_for_access = await repo.get_by_id(lead_id, tenant_id=tenant_id)
             if not lead_for_access or not _manager_can_act(manager, lead_for_access):
                 await sender.answer(callback, NO_ACCESS_TEXT, show_alert=True)
                 return
             reason_key = parts[3]
             data = await state.get_data()
-            ref_data = data.get("message_ref")
-            target_ref = MessageRef.from_dict(ref_data)
+            target_ref = MessageRef.from_dict(data.get("message_ref"))
             if reason_key == "custom":
                 await state.set_state(RejectState.waiting_for_custom_reason)
                 await sender.answer(callback)
                 await cleanup_inline_menu(callback, sender)
-                await start_force_reply(callback, state, sender, "ℹ️ Введите свою причину отказа:")
+                await start_force_reply(
+                    callback,
+                    state,
+                    sender,
+                    "ℹ️ Введите свою причину отказа:",
+                    lead_id=lead_id,
+                )
                 return
 
             reason = REJECT_REASON_LABELS.get(reason_key)
@@ -161,7 +173,7 @@ async def handle_lead_status_action(
             return
 
         if action == "clone":
-            lead_for_access = await repo.get_by_id(lead_id)
+            lead_for_access = await repo.get_by_id(lead_id, tenant_id=tenant_id)
             if not lead_for_access or not _manager_can_act(manager, lead_for_access):
                 await sender.answer(callback, NO_ACCESS_TEXT, show_alert=True)
                 return

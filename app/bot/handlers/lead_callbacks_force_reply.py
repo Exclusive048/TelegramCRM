@@ -33,6 +33,7 @@ async def handle_amount_input(
     tenant=None,
 ):
     group_id = _get_group_id(tenant) or (message.chat.id if message.chat.id < 0 else None)
+    tenant_id = tenant.id if tenant else None
     if not await reject_non_force_reply(message, state, sender):
         return
 
@@ -64,12 +65,12 @@ async def handle_amount_input(
 
     async with AsyncSessionLocal() as session:
         repo = LeadRepository(session)
-        manager = await _get_manager(repo, message.from_user.id)
+        manager = await _get_manager(repo, message.from_user.id, tenant_id=tenant_id)
         if not manager:
             await cleanup_force_reply(sender, state, message)
             await state.clear()
             return
-        lead_obj = await repo.get_by_id(int(lead_id))
+        lead_obj = await repo.get_by_id(int(lead_id), tenant_id=tenant_id)
         if not lead_obj or not _manager_can_act(manager, lead_obj):
             await cleanup_force_reply(sender, state, message)
             await sender.send_ephemeral_text(
@@ -81,7 +82,7 @@ async def handle_amount_input(
             await state.clear()
             return
 
-        service = LeadService(repo, sender, group_id=group_id)
+        service = LeadService(repo, sender, group_id=group_id, tenant_id=tenant_id)
         lead = await service.mark_paid(int(lead_id), message.from_user.id, amount, target_ref)
         if lead:
             await session.commit()
@@ -105,6 +106,7 @@ async def handle_custom_reject(
     tenant=None,
 ):
     group_id = _get_group_id(tenant) or (message.chat.id if message.chat.id < 0 else None)
+    tenant_id = tenant.id if tenant else None
     if not await reject_non_force_reply(message, state, sender):
         return
 
@@ -136,12 +138,12 @@ async def handle_custom_reject(
 
     async with AsyncSessionLocal() as session:
         repo = LeadRepository(session)
-        manager = await _get_manager(repo, message.from_user.id)
+        manager = await _get_manager(repo, message.from_user.id, tenant_id=tenant_id)
         if not manager:
             await cleanup_force_reply(sender, state, message)
             await state.clear()
             return
-        lead_obj = await repo.get_by_id(int(lead_id))
+        lead_obj = await repo.get_by_id(int(lead_id), tenant_id=tenant_id)
         if not lead_obj or not _manager_can_act(manager, lead_obj):
             await cleanup_force_reply(sender, state, message)
             await sender.send_ephemeral_text(
@@ -153,7 +155,7 @@ async def handle_custom_reject(
             await state.clear()
             return
 
-        service = LeadService(repo, sender, group_id=group_id)
+        service = LeadService(repo, sender, group_id=group_id, tenant_id=tenant_id)
         lead = await service.reject_lead(int(lead_id), message.from_user.id, reason=reason, source_ref=target_ref)
         if lead:
             await session.commit()

@@ -21,6 +21,7 @@ async def start_force_reply(
     sender: TelegramSafeSender,
     text: str,
     *,
+    lead_id: int | None = None,
     ttl_sec: int = TTL_INPUT_SEC,
     **kwargs: Any,
 ) -> Message | None:
@@ -40,10 +41,17 @@ async def start_force_reply(
         except Exception as e:
             logger.debug("force_reply cleanup previous prompt failed err={}", e)
 
+    prompt_text = text
+    if lead_id is not None:
+        if text.startswith("ℹ️ "):
+            prompt_text = f"ℹ️ Заявка #{lead_id} — {text[3:]}"
+        else:
+            prompt_text = f"Заявка #{lead_id} — {text}"
+
     prompt = await sender.send_text(
         chat_id=message.chat.id,
         message_thread_id=message.message_thread_id,
-        text=text,
+        text=prompt_text,
         reply_markup=ForceReply(selective=True),
         **kwargs,
     )

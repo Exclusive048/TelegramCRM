@@ -23,7 +23,7 @@ def _status_label(status: LeadStatus) -> str:
     return labels.get(status, status.value)
 
 
-def format_lead_card(lead: Lead) -> str:
+def format_lead_card(lead: Lead, reminder_at: datetime | None = None) -> str:
     """
     Формат карточки для Telegram (HTML).
     """
@@ -57,6 +57,9 @@ def format_lead_card(lead: Lead) -> str:
     if lead.amount is not None:
         lines.append(f"💰 Сумма: {lead.amount} руб.")
 
+    if reminder_at is not None:
+        lines.append(f"🔔 Напоминание: {reminder_at:%d.%m в %H:%M}")
+
     if lead.status in (LeadStatus.SUCCESS, LeadStatus.REJECTED):
         lines.append(f"📅 Дата закрытия: {_fmt_date(lead.closed_at, '%d.%m.%y')}")
 
@@ -68,10 +71,10 @@ def format_lead_card(lead: Lead) -> str:
 
     if lead.comments:
         lines.append("📝 Заметки:")
-        for c in lead.comments:
-            ts = _fmt_date(c.created_at, "%d.%m %H:%M")
-            author = html_escape(c.author or "—")
-            text = html_escape(c.text or "")
+        for comment_item in lead.comments:
+            ts = _fmt_date(comment_item.created_at, "%d.%m %H:%M")
+            author = html_escape(comment_item.author or "—")
+            text = html_escape(comment_item.text or "")
             lines.append(f"• {author} [{ts}]: {text}")
 
     return "\n".join(lines)
@@ -79,4 +82,4 @@ def format_lead_card(lead: Lead) -> str:
 
 def format_archive_card(lead: Lead) -> str:
     base = format_lead_card(lead)
-    return f"{base}\n\U0001f4cc \u0421\u0442\u0430\u0442\u0443\u0441: {_status_label(lead.status)}"
+    return f"{base}\n📌 Статус: {_status_label(lead.status)}"

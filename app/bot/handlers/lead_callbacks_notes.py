@@ -6,7 +6,8 @@ from aiogram import F, Router
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import default_state
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, Message
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from app.bot.constants.ttl import TTL_ERROR_SEC, TTL_MENU_SEC
 from app.bot.keyboards.lead_keyboards import make_reminder_keyboard
@@ -32,6 +33,36 @@ from .lead_callbacks_shared import (
 router = Router()
 
 
+def _resolve_quick_reminder(choice: str) -> datetime | None:
+    now = datetime.now(timezone.utc)
+    if choice == "1h":
+        return now + timedelta(hours=1)
+    if choice == "3h":
+        return now + timedelta(hours=3)
+    if choice == "tomorrow":
+        return (now + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
+    return None
+
+
+def _format_reminder_dt(remind_at: datetime) -> str:
+    return remind_at.strftime("%d.%m в %H:%M")
+
+
+def _replace_confirm_keyboard(lead_id: int):
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(
+            text="✅ Заменить",
+            callback_data=f"lead:remind_replace:{lead_id}:confirm",
+        ),
+        InlineKeyboardButton(
+            text="❌ Отмена",
+            callback_data=f"lead:remind_replace:{lead_id}:cancel",
+        ),
+    )
+    return builder.as_markup()
+
+
 @router.callback_query(F.data.regexp(r"^lead:(note|remind|remind_set):"))
 async def handle_lead_note_action(
     callback: CallbackQuery,
@@ -54,27 +85,34 @@ async def handle_lead_note_action(
     group_id = _get_group_id(tenant) or (callback.message.chat.id if callback.message.chat.id < 0 else None)
     if not group_id and callback.message:
         group_id = callback.message.chat.id
+    tenant_id = tenant.id if tenant else None
 
     async with AsyncSessionLocal() as session:
         repo = LeadRepository(session)
-        manager = await _get_manager(repo, callback.from_user.id)
+        manager = await _get_manager(repo, callback.from_user.id, tenant_id=tenant_id)
         if not manager:
             await sender.answer(callback, NO_ACCESS_TEXT, show_alert=True)
             return
 
         if action == "note":
-            lead_for_access = await repo.get_by_id(lead_id)
+            lead_for_access = await repo.get_by_id(lead_id, tenant_id=tenant_id)
             if not lead_for_access or not _manager_can_act(manager, lead_for_access):
                 await sender.answer(callback, NO_ACCESS_TEXT, show_alert=True)
                 return
             await state.set_state(NoteState.waiting_for_text)
             await state.update_data(lead_id=lead_id, message_ref=source_ref.to_dict() if source_ref else None)
             await sender.answer(callback)
-            await start_force_reply(callback, state, sender, "ℹ️ Введите заметку:")
+            await start_force_reply(
+                callback,
+                state,
+                sender,
+                "ℹ️ Введите заметку:",
+                lead_id=lead_id,
+            )
             return
 
         if action == "remind":
-            lead_for_access = await repo.get_by_id(lead_id)
+            lead_for_access = await repo.get_by_id(lead_id, tenant_id=tenant_id)
             if not lead_for_access or not _manager_can_act(manager, lead_for_access):
                 await sender.answer(callback, NO_ACCESS_TEXT, show_alert=True)
                 return
@@ -97,10 +135,11 @@ async def handle_lead_note_action(
             if len(parts) < 4:
                 await sender.answer(callback)
                 return
-            lead_for_access = await repo.get_by_id(lead_id)
+            lead_for_access = await repo.get_by_id(lead_id, tenant_id=tenant_id)
             if not lead_for_access or not _manager_can_act(manager, lead_for_access):
                 await sender.answer(callback, NO_ACCESS_TEXT, show_alert=True)
                 return
+
             choice = parts[3]
             if choice == "custom":
                 await state.set_state(ReminderState.waiting_for_custom_time)
@@ -112,18 +151,39 @@ async def handle_lead_note_action(
                 )
                 await sender.answer(callback)
                 await cleanup_inline_menu(callback, sender)
-                await start_force_reply(callback, state, sender, "ℹ️ Введите дату и время (ДД.ММ.ГГГГ ЧЧ:ММ):")
+                await start_force_reply(
+                    callback,
+                    state,
+                    sender,
+                    "ℹ️ Введите дату и время (ДД.ММ.ГГГГ ЧЧ:ММ):",
+                    lead_id=lead_id,
+                )
                 return
 
-            now = datetime.now(timezone.utc)
-            if choice == "1h":
-                remind_at = now + timedelta(hours=1)
-            elif choice == "3h":
-                remind_at = now + timedelta(hours=3)
-            elif choice == "tomorrow":
-                remind_at = (now + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
-            else:
+            remind_at = _resolve_quick_reminder(choice)
+            if not remind_at:
                 await sender.answer(callback)
+                return
+
+            existing = await repo.get_active_reminder_for_manager(lead_id, callback.from_user.id)
+            if existing:
+                await state.update_data(
+                    reminder_replace_lead_id=lead_id,
+                    reminder_replace_manager_tg_id=callback.from_user.id,
+                    reminder_replace_at=remind_at.isoformat(),
+                    reminder_replace_group_id=group_id,
+                )
+                await sender.answer(callback)
+                await sender.edit_message_text(
+                    chat_id=callback.message.chat.id,
+                    message_id=callback.message.message_id,
+                    text=(
+                        f"У заявки уже есть напоминание на {_format_reminder_dt(existing.remind_at)}.\n"
+                        "Заменить?"
+                    ),
+                    reply_markup=_replace_confirm_keyboard(lead_id),
+                    thread_id=callback.message.message_thread_id,
+                )
                 return
 
             reminder = await ReminderService(repo, sender).schedule_reminder(
@@ -141,6 +201,75 @@ async def handle_lead_note_action(
             return
 
 
+@router.callback_query(F.data.startswith("lead:remind_replace:"))
+async def handle_reminder_replace_confirmation(
+    callback: CallbackQuery,
+    state: FSMContext,
+    sender: TelegramSafeSender,
+    tenant=None,
+):
+    parts = callback.data.split(":")
+    if len(parts) < 4 or not parts[2].isdigit():
+        await sender.answer(callback)
+        return
+
+    lead_id = int(parts[2])
+    decision = parts[3]
+    if decision == "cancel":
+        await state.clear()
+        await sender.answer(callback, "Отменено.")
+        await cleanup_inline_menu(callback, sender, done_text="Действие отменено.")
+        return
+
+    data = await state.get_data()
+    stored_lead_id = data.get("reminder_replace_lead_id")
+    remind_at_raw = data.get("reminder_replace_at")
+    manager_tg_id = data.get("reminder_replace_manager_tg_id")
+    group_id = data.get("reminder_replace_group_id")
+    tenant_id = tenant.id if tenant else None
+
+    if stored_lead_id != lead_id or not remind_at_raw:
+        await state.clear()
+        await sender.answer(callback, "⚠️ Данные напоминания устарели.", show_alert=True)
+        return
+
+    try:
+        remind_at = datetime.fromisoformat(remind_at_raw)
+    except ValueError:
+        await state.clear()
+        await sender.answer(callback, "⚠️ Некорректная дата напоминания.", show_alert=True)
+        return
+
+    async with AsyncSessionLocal() as session:
+        repo = LeadRepository(session)
+        manager = await _get_manager(repo, callback.from_user.id, tenant_id=tenant_id)
+        if not manager:
+            await state.clear()
+            await sender.answer(callback, NO_ACCESS_TEXT, show_alert=True)
+            return
+        lead_obj = await repo.get_by_id(lead_id, tenant_id=tenant_id)
+        if not lead_obj or not _manager_can_act(manager, lead_obj):
+            await state.clear()
+            await sender.answer(callback, NO_ACCESS_TEXT, show_alert=True)
+            return
+
+        reminder_service = ReminderService(repo, sender)
+        reminder, _ = await reminder_service.replace_reminder(
+            lead_id=lead_id,
+            manager_tg_id=manager_tg_id or callback.from_user.id,
+            remind_at=remind_at,
+            group_id=group_id,
+        )
+        await session.commit()
+
+    await state.clear()
+    if reminder:
+        await sender.answer(callback, "✅ Напоминание обновлено.")
+        await cleanup_inline_menu(callback, sender)
+    else:
+        await sender.answer(callback, "⚠️ Не удалось обновить напоминание.", show_alert=True)
+
+
 @router.message(NoteState.waiting_for_text)
 async def handle_note_text(
     message: Message,
@@ -149,6 +278,7 @@ async def handle_note_text(
     tenant=None,
 ):
     group_id = _get_group_id(tenant) or (message.chat.id if message.chat.id < 0 else None)
+    tenant_id = tenant.id if tenant else None
 
     if not await reject_non_force_reply(message, state, sender):
         return
@@ -181,12 +311,12 @@ async def handle_note_text(
 
     async with AsyncSessionLocal() as session:
         repo = LeadRepository(session)
-        manager = await _get_manager(repo, message.from_user.id)
+        manager = await _get_manager(repo, message.from_user.id, tenant_id=tenant_id)
         if not manager:
             await cleanup_force_reply(sender, state, message)
             await state.clear()
             return
-        lead_obj = await repo.get_by_id(int(lead_id))
+        lead_obj = await repo.get_by_id(int(lead_id), tenant_id=tenant_id)
         if not lead_obj or not _manager_can_act(manager, lead_obj):
             await cleanup_force_reply(sender, state, message)
             await sender.send_ephemeral_text(
@@ -198,7 +328,7 @@ async def handle_note_text(
             await state.clear()
             return
 
-        service = LeadService(repo, sender, group_id=group_id)
+        service = LeadService(repo, sender, group_id=group_id, tenant_id=tenant_id)
         await service.add_comment(
             lead_id=int(lead_id),
             text=text,
@@ -219,6 +349,7 @@ async def handle_custom_reminder_time(
     tenant=None,
 ):
     group_id = _get_group_id(tenant) or (message.chat.id if message.chat.id < 0 else None)
+    tenant_id = tenant.id if tenant else None
 
     if not await reject_non_force_reply(message, state, sender):
         return
@@ -253,12 +384,12 @@ async def handle_custom_reminder_time(
 
     async with AsyncSessionLocal() as session:
         repo = LeadRepository(session)
-        manager = await _get_manager(repo, message.from_user.id)
+        manager = await _get_manager(repo, message.from_user.id, tenant_id=tenant_id)
         if not manager:
             await cleanup_force_reply(sender, state, message)
             await state.clear()
             return
-        lead_obj = await repo.get_by_id(int(lead_id))
+        lead_obj = await repo.get_by_id(int(lead_id), tenant_id=tenant_id)
         if not lead_obj or not _manager_can_act(manager, lead_obj):
             await cleanup_force_reply(sender, state, message)
             await sender.send_ephemeral_text(
@@ -268,6 +399,28 @@ async def handle_custom_reminder_time(
                 ttl_sec=TTL_ERROR_SEC,
             )
             await state.clear()
+            return
+
+        existing = await repo.get_active_reminder_for_manager(int(lead_id), message.from_user.id)
+        if existing:
+            await state.update_data(
+                reminder_replace_lead_id=int(lead_id),
+                reminder_replace_manager_tg_id=message.from_user.id,
+                reminder_replace_at=remind_at.isoformat(),
+                reminder_replace_group_id=group_id,
+            )
+            await sender.send_ephemeral_text(
+                chat_id=message.chat.id,
+                message_thread_id=message.message_thread_id,
+                text=(
+                    f"У заявки уже есть напоминание на {_format_reminder_dt(existing.remind_at)}.\n"
+                    "Заменить?"
+                ),
+                reply_markup=_replace_confirm_keyboard(int(lead_id)),
+                ttl_sec=TTL_MENU_SEC,
+            )
+            await cleanup_force_reply(sender, state, message)
+            await state.set_state(default_state)
             return
 
         reminder = await ReminderService(repo, sender).schedule_reminder(
@@ -299,6 +452,7 @@ async def handle_custom_reminder_time(
 @router.message(F.reply_to_message, ~F.text.startswith("/"), StateFilter(default_state))
 async def handle_reply_note(message: Message, sender: TelegramSafeSender, tenant=None):
     group_id = _get_group_id(tenant) or (message.chat.id if message.chat.id < 0 else None)
+    tenant_id = tenant.id if tenant else None
     if not group_id or message.chat.id != group_id:
         return
     if not message.text or message.text.startswith("/"):
@@ -310,7 +464,7 @@ async def handle_reply_note(message: Message, sender: TelegramSafeSender, tenant
 
     async with AsyncSessionLocal() as session:
         repo = LeadRepository(session)
-        manager = await _get_manager(repo, message.from_user.id)
+        manager = await _get_manager(repo, message.from_user.id, tenant_id=tenant_id)
         if not manager:
             try:
                 await sender.delete_message(
@@ -322,11 +476,11 @@ async def handle_reply_note(message: Message, sender: TelegramSafeSender, tenant
                 pass
             return
 
-        record = await repo.get_card_message(target_ref.chat_id, target_ref.message_id)
+        record = await repo.get_card_message(target_ref.chat_id, target_ref.message_id, tenant_id=tenant_id)
         lead_id = record.lead_id if record else None
         if not lead_id:
             lead = await repo.get_lead_by_tg_message(target_ref.message_id, target_ref.topic_id)
-            if lead:
+            if lead and (tenant_id is None or lead.tenant_id == tenant_id):
                 await repo.ensure_active_card_message(
                     lead_id=lead.id,
                     chat_id=target_ref.chat_id,
@@ -338,7 +492,7 @@ async def handle_reply_note(message: Message, sender: TelegramSafeSender, tenant
         if not lead_id:
             return
 
-        lead_obj = await repo.get_by_id(lead_id)
+        lead_obj = await repo.get_by_id(lead_id, tenant_id=tenant_id)
         if not lead_obj or not _manager_can_act(manager, lead_obj):
             try:
                 await sender.delete_message(
@@ -356,7 +510,7 @@ async def handle_reply_note(message: Message, sender: TelegramSafeSender, tenant
             )
             return
 
-        service = LeadService(repo, sender, group_id=group_id)
+        service = LeadService(repo, sender, group_id=group_id, tenant_id=tenant_id)
         await service.add_comment(
             lead_id=lead_id,
             text=message.text.strip(),

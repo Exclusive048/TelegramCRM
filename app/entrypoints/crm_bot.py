@@ -4,6 +4,7 @@ import asyncio
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
+from aiogram.types import BotCommand, BotCommandScopeAllGroupChats, BotCommandScopeAllPrivateChats
 from loguru import logger
 
 from app.bootstrap import (
@@ -22,12 +23,30 @@ from app.services.subscription_scheduler import start_subscription_scheduler
 from master_bot.notify import set_master_bot
 
 
+async def _set_crm_commands(bot: Bot) -> None:
+    group_commands = [
+        BotCommand(command="setup", description="Настроить CRM в группе"),
+        BotCommand(command="cabinet", description="Открыть кабинет администратора"),
+        BotCommand(command="panel", description="Восстановить пульт менеджеров"),
+        BotCommand(command="managers", description="Показать команду менеджеров"),
+        BotCommand(command="add_manager", description="Добавить менеджера (reply)"),
+        BotCommand(command="remove_manager", description="Удалить менеджера (reply)"),
+        BotCommand(command="make_admin", description="Назначить CRM-админа (reply)"),
+    ]
+    private_commands = [
+        BotCommand(command="start", description="Как подключить CRM к группе"),
+    ]
+    await bot.set_my_commands(group_commands, scope=BotCommandScopeAllGroupChats())
+    await bot.set_my_commands(private_commands, scope=BotCommandScopeAllPrivateChats())
+
+
 async def main() -> None:
     logger.info("Starting CRM bot process")
     logger.info("Ensure 'python migrate.py dev' was run before first launch.")
 
     bot = Bot(token=settings.bot_token, default=DefaultBotProperties(parse_mode="HTML"))
     await clear_webhook(bot, name="CRM bot")
+    await _set_crm_commands(bot)
 
     sender, deletion_service = init_sender(
         bot,

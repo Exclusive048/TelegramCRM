@@ -81,6 +81,6 @@ async def is_crm_admin(
     m = await get_manager(repo, tg_id)
     if m is None or not m.is_active:
         return False
-    if tenant_id is not None and m.tenant_id != tenant_id:
+    if tenant_id is not None and m.tenant_id not in (tenant_id, None):
         return False
     return m.role == ManagerRole.ADMIN

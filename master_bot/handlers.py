@@ -12,7 +12,9 @@ from loguru import logger
 
 from app.core.config import settings
 from app.db.database import AsyncSessionLocal
+from app.db.models.lead import ManagerRole
 from app.db.models.tenant import Tenant
+from app.db.repositories.lead_repository import LeadRepository
 from app.db.repositories.tenant_repository import TenantRepository
 from master_bot.notify import notify_admin
 
@@ -64,6 +66,12 @@ def _tenant_detail_text(tenant: Tenant) -> str:
 def _account_keyboard(tenant: Tenant) -> InlineKeyboardBuilder:
     b = InlineKeyboardBuilder()
 
+    if not tenant.trial_used:
+        b.row(InlineKeyboardButton(
+            text=f"🆓 Активировать пробный {settings.trial_days} дн.",
+            callback_data=f"reg:trial:{tenant.id}",
+        ))
+
     # Кнопка оплаты — показывать всегда
     label = "💳 Продлить подписку" if tenant.is_active else "💳 Оплатить подписку"
     b.row(InlineKeyboardButton(
@@ -99,9 +107,10 @@ async def cmd_start(message: Message, state: FSMContext, command: CommandObject)
 
     async with AsyncSessionLocal() as session:
         repo = TenantRepository(session)
-        tenants = await repo.get_by_owner(message.from_user.id)
+        tenants = await repo.get_tenants_by_owner(message.from_user.id)
 
     if tenants:
+        await state.clear()
         await _show_my_accounts(message, tenants)
         return
 
@@ -145,11 +154,20 @@ async def handle_company_name(message: Message, state: FSMContext):
             referrer = await repo.get_by_referral_code(referred_code)
             if referrer:
                 referrer_id = referrer.id
-        tenant = await repo.create(
+        tenant = await repo.create_tenant(
             owner_tg_id=message.from_user.id,
             company_name=name,
             referred_by_id=referrer_id,
         )
+        lead_repo = LeadRepository(session)
+        await lead_repo.upsert_manager_from_contact(
+            tg_id=message.from_user.id,
+            name=message.from_user.full_name,
+            username=message.from_user.username,
+            role=ManagerRole.ADMIN,
+            tenant_id=tenant.id,
+        )
+        tenants = await repo.get_tenants_by_owner(message.from_user.id)
         await session.commit()
         tenant_id = tenant.id
 
@@ -161,22 +179,12 @@ async def handle_company_name(message: Message, state: FSMContext):
         + (f"\n🔗 Пришёл по реф. коду: {referred_code}" if referred_code else "")
     )
 
-    builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(
-        text=f"🆓 Пробный период {settings.trial_days} дней — бесплатно",
-        callback_data=f"reg:trial:{tenant_id}",
-    ))
-    builder.row(InlineKeyboardButton(
-        text=f"💳 Оплатить сразу — {settings.subscription_price} руб/мес",
-        callback_data=f"reg:pay:{tenant_id}",
-    ))
-
     await message.answer(
         f"✅ Аккаунт <b>{name}</b> создан!\n\n"
-        "Выберите как начать работу:",
-        reply_markup=builder.as_markup(),
+        "Ниже список ваших CRM-аккаунтов. Выберите нужный для управления.",
         parse_mode="HTML",
     )
+    await _show_my_accounts(message, tenants)
 
 
 # ── Список аккаунтов ───────────────────────────────────────────────────────────
@@ -213,7 +221,7 @@ async def cb_main_back(callback: CallbackQuery):
     await callback.answer()
     async with AsyncSessionLocal() as session:
         repo = TenantRepository(session)
-        tenants = await repo.get_by_owner(callback.from_user.id)
+        tenants = await repo.get_tenants_by_owner(callback.from_user.id)
     await _show_my_accounts(callback, tenants)
 
 

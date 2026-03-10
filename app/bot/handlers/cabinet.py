@@ -2,28 +2,194 @@
 /cabinet — кабинет администрирования.
 Доступен только CRM-администраторам.
 """
+
+from __future__ import annotations
+
 import asyncio
+import io
 from datetime import datetime, timedelta, timezone
-import io  # FIXED #13
 
-import openpyxl  # FIXED #13
-from openpyxl.styles import Font, PatternFill, Alignment  # FIXED #13
-
-from aiogram import Router, F
+import openpyxl
+from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
-from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, BufferedInputFile, FSInputFile
+from aiogram.types import BufferedInputFile, CallbackQuery, FSInputFile, InlineKeyboardButton, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+from loguru import logger
+from openpyxl.styles import Alignment, Font, PatternFill
 
-from app.core.config import settings
-from app.bot.constants.ttl import TTL_MENU_SEC, TTL_ERROR_SEC
+from app.bot.constants.ttl import TTL_ERROR_SEC, TTL_MENU_SEC
+from app.bot.topic_cache import invalidate as invalidate_topic_cache
+from app.bot.topic_resolver import resolve_topic_thread_id
+from app.bot.topics import TOPIC_SPECS, TopicKey
 from app.bot.utils.handler_helpers import resolve_admin_context
+from app.core.config import settings
 from app.db.database import AsyncSessionLocal
-from app.db.repositories.lead_repository import LeadRepository
 from app.db.models.lead import LeadStatus
+from app.db.repositories.lead_repository import LeadRepository
+from app.db.repositories.tenant_topics import TenantTopicRepository
 from app.telegram.html_utils import html_escape
 from app.telegram.safe_sender import TelegramSafeSender
 
 router = Router()
+
+CABINET_HOME_TEXT = "🗂 <b>Кабинет</b>\n\nВыберите раздел."
+
+
+def _get_topic_spec(key: TopicKey):
+    for spec in TOPIC_SPECS:
+        if spec.key == key:
+            return spec
+    return None
+
+
+async def _probe_topic_thread(sender: TelegramSafeSender, chat_id: int, thread_id: int) -> bool:
+    await sender.get_chat(chat_id)
+    probe = await sender.send_text(chat_id=chat_id, message_thread_id=thread_id, text=".")
+    try:
+        await sender.delete_message(
+            chat_id=chat_id,
+            message_id=probe.message_id,
+            thread_id=probe.message_thread_id,
+        )
+    except Exception as exc:
+        logger.warning(f"Could not delete probe message in cabinet topic {thread_id}: {exc}")
+    return True
+
+
+async def _pin_cabinet_message(sender: TelegramSafeSender, chat_id: int, topic_id: int, message_id: int):
+    try:
+        await sender.unpin_all_forum_topic_messages(chat_id, topic_id)
+    except Exception as exc:
+        logger.warning(f"Could not unpin old cabinet messages: {exc}")
+    try:
+        await sender.pin_chat_message(chat_id, message_id, disable_notification=True)
+    except Exception as exc:
+        logger.warning(f"Could not pin cabinet message: {exc}")
+
+
+async def _safe_edit_cabinet_message(
+    sender: TelegramSafeSender,
+    repo: LeadRepository,
+    chat_id: int,
+    topic_id: int,
+    message_id: int,
+    text: str,
+    reply_markup,
+) -> int:
+    try:
+        await sender.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text=text,
+            reply_markup=reply_markup,
+            parse_mode="HTML",
+            thread_id=topic_id,
+        )
+        return message_id
+    except TelegramBadRequest as e:
+        msg = str(e).lower()
+        if "message is not modified" in msg:
+            try:
+                await sender.edit_message_reply_markup(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    reply_markup=reply_markup,
+                    thread_id=topic_id,
+                )
+            except TelegramBadRequest as markup_err:
+                logger.warning(f"Cabinet reply markup edit failed: {markup_err}")
+            return message_id
+        if any(token in msg for token in ("message to edit not found", "message_id_invalid", "message can't be edited")):
+            new_msg = await sender.send_message(
+                chat_id=chat_id,
+                message_thread_id=topic_id,
+                text=text,
+                reply_markup=reply_markup,
+                parse_mode="HTML",
+            )
+            await repo.set_panel_message_id(chat_id, topic_id, new_msg.message_id)
+            await _pin_cabinet_message(sender, chat_id, topic_id, new_msg.message_id)
+            logger.warning(f"Cabinet message restored with new message_id={new_msg.message_id}")
+            return new_msg.message_id
+        logger.error(f"Failed to edit cabinet message: {e}")
+        return message_id
+
+
+async def ensure_cabinet_message(sender: TelegramSafeSender, chat_id: int) -> tuple[int, int] | None:
+    async with AsyncSessionLocal() as session:
+        repo = LeadRepository(session)
+        topic_repo = TenantTopicRepository(session)
+
+        topic_id = await resolve_topic_thread_id(
+            chat_id,
+            TopicKey.CABINET,
+            session,
+            sender=None,
+        )
+
+        if topic_id:
+            try:
+                try:
+                    await _probe_topic_thread(sender, chat_id, topic_id)
+                except TelegramBadRequest as e:
+                    if "message thread not found" in str(e).lower():
+                        topic_id = None
+                    else:
+                        raise
+            except Exception as exc:
+                logger.error(f"Failed to validate cabinet topic: {exc}")
+                return None
+
+        if not topic_id:
+            spec = _get_topic_spec(TopicKey.CABINET)
+            if not spec:
+                logger.error("Topic spec missing for CABINET")
+                return None
+            try:
+                topic = await sender.create_forum_topic(chat_id, spec.title)
+                topic_id = topic.message_thread_id
+                await topic_repo.upsert_topic(
+                    chat_id=chat_id,
+                    key=TopicKey.CABINET.value,
+                    thread_id=topic_id,
+                    title=spec.title,
+                )
+                await session.commit()
+                invalidate_topic_cache(chat_id)
+            except Exception as exc:
+                logger.error(f"Failed to create cabinet topic: {exc}")
+                return None
+
+        existing_message_id = await repo.get_or_create_panel_message_id(chat_id, topic_id)
+        keyboard = _main_keyboard().as_markup()
+
+        if existing_message_id:
+            message_id = await _safe_edit_cabinet_message(
+                sender,
+                repo,
+                chat_id,
+                topic_id,
+                existing_message_id,
+                CABINET_HOME_TEXT,
+                keyboard,
+            )
+            await repo.set_panel_message_id(chat_id, topic_id, message_id)
+            await session.commit()
+            await _pin_cabinet_message(sender, chat_id, topic_id, message_id)
+            return topic_id, message_id
+
+        msg = await sender.send_message(
+            chat_id=chat_id,
+            message_thread_id=topic_id,
+            text=CABINET_HOME_TEXT,
+            reply_markup=keyboard,
+            parse_mode="HTML",
+        )
+        await repo.get_or_create_panel_message_id(chat_id, topic_id, msg.message_id)
+        await session.commit()
+        await _pin_cabinet_message(sender, chat_id, topic_id, msg.message_id)
+        return topic_id, msg.message_id
 
 
 def _main_keyboard() -> InlineKeyboardBuilder:
@@ -142,13 +308,7 @@ async def cmd_cabinet(message: Message, sender: TelegramSafeSender, tenant=None)
         )
         return
 
-    await sender.send_message(
-        chat_id=message.chat.id,
-        message_thread_id=message.message_thread_id,
-        text="🗂 <b>Кабинет</b>\n\nВыберите раздел.",
-        reply_markup=_main_keyboard().as_markup(),
-        parse_mode="HTML",
-    )
+    await ensure_cabinet_message(sender, message.chat.id)
     try:
         await sender.delete_message(
             chat_id=message.chat.id,
@@ -165,16 +325,9 @@ async def cab_back(callback: CallbackQuery, sender: TelegramSafeSender, tenant=N
     if not ctx:
         await sender.answer(callback)
         return
-    group_id, _ = ctx
     await sender.answer(callback)
-    await sender.edit_text(
-        chat_id=callback.message.chat.id,
-        message_id=callback.message.message_id,
-        text="🗂 <b>Кабинет</b>\n\nВыберите раздел.",
-        reply_markup=_main_keyboard().as_markup(),
-        parse_mode="HTML",
-        thread_id=callback.message.message_thread_id,
-    )
+    if callback.message:
+        await ensure_cabinet_message(sender, callback.message.chat.id)
 
 
 @router.callback_query(F.data == "cab:export")
@@ -183,7 +336,6 @@ async def cab_export_menu(callback: CallbackQuery, sender: TelegramSafeSender, t
     if not ctx:
         await sender.answer(callback, "⛔️ Нет доступа.", show_alert=True)
         return
-    group_id, _ = ctx
     await sender.answer(callback)
     await sender.edit_text(
         chat_id=callback.message.chat.id,
@@ -200,7 +352,6 @@ async def cab_export_period(callback: CallbackQuery, sender: TelegramSafeSender,
     if not ctx:
         await sender.answer(callback, "⛔️ Нет доступа.", show_alert=True)
         return
-    group_id, _ = ctx
     await sender.answer(callback)
     stage = callback.data.split(":")[2]
     await sender.edit_message_text(
@@ -211,12 +362,6 @@ async def cab_export_period(callback: CallbackQuery, sender: TelegramSafeSender,
         parse_mode="HTML",
         thread_id=callback.message.message_thread_id,
     )
-    await sender.schedule_delete(
-        chat_id=callback.message.chat.id,
-        message_id=callback.message.message_id,
-        thread_id=callback.message.message_thread_id,
-        ttl_sec=TTL_MENU_SEC,
-    )
 
 
 @router.callback_query(F.data.startswith("cab:export_do:"))
@@ -225,33 +370,38 @@ async def cab_export_do(callback: CallbackQuery, sender: TelegramSafeSender, ten
     if not ctx:
         await sender.answer(callback, "⛔️ Нет доступа.", show_alert=True)
         return
-    group_id, _ = ctx
+    tenant_id = tenant.id if tenant else None
+    await sender.answer(callback)
+
     parts = callback.data.split(":")
     if len(parts) < 4:
-        await sender.answer(callback)
         return
     stage = parts[2]
     period = parts[3]
     date_from, date_to = _period_dates(period)
-
     status = LeadStatus(stage)
 
     async with AsyncSessionLocal() as session:
         repo = LeadRepository(session)
-        leads, total = await repo.get_list(status=status, date_from=date_from, date_to=date_to, per_page=10000)
+        leads, total = await repo.get_list(
+            status=status,
+            date_from=date_from,
+            date_to=date_to,
+            per_page=10000,
+            tenant_id=tenant_id,
+        )
 
     if not leads:
-        msg = await sender.answer(callback.message, "ℹ️ Нет заявок по выбранному фильтру.")
-        await sender.schedule_delete(
-            chat_id=msg.chat.id,
-            message_id=msg.message_id,
-            thread_id=msg.message_thread_id,
+        await sender.send_ephemeral_text(
+            chat_id=callback.message.chat.id,
+            message_thread_id=callback.message.message_thread_id,
+            text="ℹ️ Нет заявок по выбранному фильтру.",
             ttl_sec=TTL_MENU_SEC,
         )
+        await ensure_cabinet_message(sender, callback.message.chat.id)
         return
 
     workbook_bytes = await asyncio.get_event_loop().run_in_executor(None, build_workbook, leads)
-
     filename = f"leads_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M')}.xlsx"
     await sender.send_document(
         chat_id=callback.message.chat.id,
@@ -261,6 +411,7 @@ async def cab_export_do(callback: CallbackQuery, sender: TelegramSafeSender, ten
         parse_mode=None,
         ttl_sec=TTL_MENU_SEC,
     )
+    await ensure_cabinet_message(sender, callback.message.chat.id)
 
 
 @router.callback_query(F.data == "cab:analytics")
@@ -269,7 +420,6 @@ async def cab_analytics(callback: CallbackQuery, sender: TelegramSafeSender, ten
     if not ctx:
         await sender.answer(callback, "⛔️ Нет доступа.", show_alert=True)
         return
-    group_id, _ = ctx
     await sender.answer(callback)
     builder = InlineKeyboardBuilder()
     builder.row(
@@ -277,19 +427,13 @@ async def cab_analytics(callback: CallbackQuery, sender: TelegramSafeSender, ten
         InlineKeyboardButton(text="👥 Работа с заявками", callback_data="cab:analytics:activity"),
     )
     builder.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="cab:back"))
-    await sender.edit_message_text(  # FIXED #5
+    await sender.edit_message_text(
         chat_id=callback.message.chat.id,
         message_id=callback.message.message_id,
         text="📊 <b>Аналитика</b>\nВыберите режим:",
         reply_markup=builder.as_markup(),
         parse_mode="HTML",
         thread_id=callback.message.message_thread_id,
-    )
-    await sender.schedule_delete(
-        chat_id=callback.message.chat.id,
-        message_id=callback.message.message_id,
-        thread_id=callback.message.message_thread_id,
-        ttl_sec=TTL_MENU_SEC,
     )
 
 
@@ -299,21 +443,14 @@ async def cab_analytics_conversion(callback: CallbackQuery, sender: TelegramSafe
     if not ctx:
         await sender.answer(callback, "⛔️ Нет доступа.", show_alert=True)
         return
-    group_id, _ = ctx
     await sender.answer(callback)
-    await sender.edit_message_text(  # FIXED #5
+    await sender.edit_message_text(
         chat_id=callback.message.chat.id,
         message_id=callback.message.message_id,
         text="📈 <b>Конверсия</b>\nВыберите период:",
         reply_markup=_period_keyboard("cab:analytics_conversion").as_markup(),
         parse_mode="HTML",
         thread_id=callback.message.message_thread_id,
-    )
-    await sender.schedule_delete(
-        chat_id=callback.message.chat.id,
-        message_id=callback.message.message_id,
-        thread_id=callback.message.message_thread_id,
-        ttl_sec=TTL_MENU_SEC,
     )
 
 
@@ -323,22 +460,20 @@ async def cab_analytics_conversion_period(callback: CallbackQuery, sender: Teleg
     if not ctx:
         await sender.answer(callback, "⛔️ Нет доступа.", show_alert=True)
         return
-    group_id, _ = ctx
+    tenant_id = tenant.id if tenant else None
     await sender.answer(callback)
     period = callback.data.split(":")[2]
     date_from, date_to = _period_dates(period)
 
     async with AsyncSessionLocal() as session:
         repo = LeadRepository(session)
-        stats = await repo.get_conversion_stats(date_from=date_from, date_to=date_to)
+        stats = await repo.get_conversion_stats(date_from=date_from, date_to=date_to, tenant_id=tenant_id)
 
     s = stats["by_status"]
-    period_line = f"За период с {date_from:%d.%m.%y} - {date_to:%d.%m.%y}"
     total = stats["total"]
-
     lines = [
         "📈 <b>Конверсия</b>",
-        period_line,
+        f"За период с {date_from:%d.%m.%y} - {date_to:%d.%m.%y}",
         f"Всего лидов: {total}",
         f"Взято в работу: {s.get('in_progress', 0)} ({_pct(s.get('in_progress', 0), total)})",
         f"Оплачено: {s.get('paid', 0)} ({_pct(s.get('paid', 0), total)})",
@@ -346,19 +481,14 @@ async def cab_analytics_conversion_period(callback: CallbackQuery, sender: Teleg
         f"Отклонено: {s.get('rejected', 0)} ({_pct(s.get('rejected', 0), total)})",
     ]
 
-    await sender.edit_message_text(
+    await sender.send_ephemeral_text(
         chat_id=callback.message.chat.id,
-        message_id=callback.message.message_id,
+        message_thread_id=callback.message.message_thread_id,
         text="\n".join(lines),
-        thread_id=callback.message.message_thread_id,
         parse_mode="HTML",
-    )
-    await sender.schedule_delete(
-        chat_id=callback.message.chat.id,
-        message_id=callback.message.message_id,
-        thread_id=callback.message.message_thread_id,
         ttl_sec=TTL_MENU_SEC,
     )
+    await ensure_cabinet_message(sender, callback.message.chat.id)
 
 
 @router.callback_query(F.data.startswith("cab:analytics:activity"))
@@ -367,21 +497,14 @@ async def cab_analytics_activity(callback: CallbackQuery, sender: TelegramSafeSe
     if not ctx:
         await sender.answer(callback, "⛔️ Нет доступа.", show_alert=True)
         return
-    group_id, _ = ctx
     await sender.answer(callback)
-    await sender.edit_message_text(  # FIXED #5
+    await sender.edit_message_text(
         chat_id=callback.message.chat.id,
         message_id=callback.message.message_id,
         text="👥 <b>Работа с заявками</b>\nВыберите период:",
         reply_markup=_period_keyboard("cab:analytics_activity").as_markup(),
         parse_mode="HTML",
         thread_id=callback.message.message_thread_id,
-    )
-    await sender.schedule_delete(
-        chat_id=callback.message.chat.id,
-        message_id=callback.message.message_id,
-        thread_id=callback.message.message_thread_id,
-        ttl_sec=TTL_MENU_SEC,
     )
 
 
@@ -391,7 +514,6 @@ async def cab_analytics_activity_period(callback: CallbackQuery, sender: Telegra
     if not ctx:
         await sender.answer(callback, "⛔️ Нет доступа.", show_alert=True)
         return
-    group_id, _ = ctx
     await sender.answer(callback)
     period = callback.data.split(":")[2]
     async with AsyncSessionLocal() as session:
@@ -400,8 +522,13 @@ async def cab_analytics_activity_period(callback: CallbackQuery, sender: Telegra
 
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text="Все", callback_data=f"cab:analytics_activity_run:{period}:all"))
-    for m in managers:
-        builder.row(InlineKeyboardButton(text=m.name, callback_data=f"cab:analytics_activity_run:{period}:{m.id}"))
+    for manager in managers:
+        builder.row(
+            InlineKeyboardButton(
+                text=manager.name,
+                callback_data=f"cab:analytics_activity_run:{period}:{manager.id}",
+            )
+        )
     builder.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="cab:back"))
     await sender.edit_text(
         chat_id=callback.message.chat.id,
@@ -411,12 +538,6 @@ async def cab_analytics_activity_period(callback: CallbackQuery, sender: Telegra
         parse_mode="HTML",
         thread_id=callback.message.message_thread_id,
     )
-    await sender.schedule_delete(
-        chat_id=callback.message.chat.id,
-        message_id=callback.message.message_id,
-        thread_id=callback.message.message_thread_id,
-        ttl_sec=TTL_MENU_SEC,
-    )
 
 
 @router.callback_query(F.data.startswith("cab:analytics_activity_run:"))
@@ -425,22 +546,27 @@ async def cab_analytics_activity_run(callback: CallbackQuery, sender: TelegramSa
     if not ctx:
         await sender.answer(callback, "⛔️ Нет доступа.", show_alert=True)
         return
-    group_id, _ = ctx
+    tenant_id = tenant.id if tenant else None
     await sender.answer(callback)
+
     _, _, period, manager_raw = callback.data.split(":")
     date_from, date_to = _period_dates(period)
     manager_id = None if manager_raw == "all" else (int(manager_raw) if manager_raw.isdigit() else None)
 
     async with AsyncSessionLocal() as session:
         repo = LeadRepository(session)
-        stats = await repo.get_activity_stats(date_from=date_from, date_to=date_to, manager_id=manager_id)
+        stats = await repo.get_activity_stats(
+            date_from=date_from,
+            date_to=date_to,
+            manager_id=manager_id,
+            tenant_id=tenant_id,
+        )
 
     total = stats["total"]
     s = stats["by_status"]
-    period_line = f"За период с {date_from:%d.%m.%y} - {date_to:%d.%m.%y}"
     lines = [
         "👥 <b>Работа с заявками</b>",
-        period_line,
+        f"За период с {date_from:%d.%m.%y} - {date_to:%d.%m.%y}",
         f"Всего лидов: {total}",
         f"Взято в работу: {s.get('in_progress', 0)} ({_pct(s.get('in_progress', 0), total)})",
         f"Оплачено: {s.get('paid', 0)} ({_pct(s.get('paid', 0), total)})",
@@ -448,19 +574,14 @@ async def cab_analytics_activity_run(callback: CallbackQuery, sender: TelegramSa
         f"Отклонено: {s.get('rejected', 0)} ({_pct(s.get('rejected', 0), total)})",
     ]
 
-    await sender.edit_message_text(
+    await sender.send_ephemeral_text(
         chat_id=callback.message.chat.id,
-        message_id=callback.message.message_id,
+        message_thread_id=callback.message.message_thread_id,
         text="\n".join(lines),
         parse_mode="HTML",
-        thread_id=callback.message.message_thread_id,
-    )
-    await sender.schedule_delete(
-        chat_id=callback.message.chat.id,
-        message_id=callback.message.message_id,
-        thread_id=callback.message.message_thread_id,
         ttl_sec=TTL_MENU_SEC,
     )
+    await ensure_cabinet_message(sender, callback.message.chat.id)
 
 
 def _pct(part: int, total: int) -> str:
@@ -469,17 +590,14 @@ def _pct(part: int, total: int) -> str:
     return f"{round(part / total * 100)}%"
 
 
-# ── Интеграции ───────────────────────────────────────
-
-
 @router.callback_query(F.data == "cab:integrations")
 async def cab_integrations(callback: CallbackQuery, sender: TelegramSafeSender, tenant=None):
     ctx = await resolve_admin_context(callback, tenant, sender)
     if not ctx:
         await sender.answer(callback, "⛔️ Нет доступа.", show_alert=True)
         return
-    group_id, _ = ctx
     await sender.answer(callback)
+
     raw_domain = (settings.public_domain or "YOUR_DOMAIN").strip()
     domain = raw_domain.replace("https://", "").replace("http://", "").strip("/") or "YOUR_DOMAIN"
     url = f"https://{domain}/api/v1/leads/tilda"
@@ -496,19 +614,13 @@ async def cab_integrations(callback: CallbackQuery, sender: TelegramSafeSender, 
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text="📋 Скопировать ссылку", callback_data="cab:copy_webhook"))
     builder.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="cab:back"))
-    await sender.edit_message_text(  # FIXED #5
+    await sender.edit_message_text(
         chat_id=callback.message.chat.id,
         message_id=callback.message.message_id,
         text=text,
         reply_markup=builder.as_markup(),
         parse_mode="HTML",
         thread_id=callback.message.message_thread_id,
-    )
-    await sender.schedule_delete(
-        chat_id=callback.message.chat.id,
-        message_id=callback.message.message_id,
-        thread_id=callback.message.message_thread_id,
-        ttl_sec=TTL_MENU_SEC,
     )
     try:
         snippet = FSInputFile("integrations/tilda_snippet.js")
@@ -535,7 +647,6 @@ async def cab_copy_webhook(callback: CallbackQuery, sender: TelegramSafeSender, 
     if not ctx:
         await sender.answer(callback)
         return
-    group_id, _ = ctx
     await sender.answer(callback)
     raw_domain = (settings.public_domain or "YOUR_DOMAIN").strip()
     domain = raw_domain.replace("https://", "").replace("http://", "").strip("/") or "YOUR_DOMAIN"
@@ -548,33 +659,19 @@ async def cab_copy_webhook(callback: CallbackQuery, sender: TelegramSafeSender, 
     )
 
 
-# ── Тариф ────────────────────────────────────────────
-
-
 @router.callback_query(F.data == "cab:tariff")
 async def cab_tariff(callback: CallbackQuery, sender: TelegramSafeSender, tenant=None):
     ctx = await resolve_admin_context(callback, tenant, sender)
     if not ctx:
         await sender.answer(callback, "⛔️ Нет доступа.", show_alert=True)
         return
-    group_id, _ = ctx
     await sender.answer(callback)
     await sender.edit_text(
         chat_id=callback.message.chat.id,
         message_id=callback.message.message_id,
-        text='💳 Текущий тариф: StartupImpuls\nЗаявок в месяц: без ограничений\nПоддержка: @StartupImpuls',
+        text="💳 Текущий тариф: StartupImpuls\nЗаявок в месяц: без ограничений\nПоддержка: @StartupImpuls",
         reply_markup=InlineKeyboardBuilder().row(
             InlineKeyboardButton(text="⬅️ Назад", callback_data="cab:back")
         ).as_markup(),
         thread_id=callback.message.message_thread_id,
     )
-    await sender.schedule_delete(
-        chat_id=callback.message.chat.id,
-        message_id=callback.message.message_id,
-        thread_id=callback.message.message_thread_id,
-        ttl_sec=TTL_MENU_SEC,
-    )
-
-
-
-

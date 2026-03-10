@@ -118,6 +118,12 @@ class TenantRepository:
         )
         return result.scalar_one_or_none()
 
+    async def get_by_api_key_any(self, api_key: str) -> Tenant | None:
+        result = await self.session.execute(
+            select(Tenant).where(Tenant.api_key == api_key)
+        )
+        return result.scalar_one_or_none()
+
     async def get_by_id(self, tenant_id: int) -> Tenant | None:
         result = await self.session.execute(
             select(Tenant).where(Tenant.id == tenant_id)
@@ -131,6 +137,7 @@ class TenantRepository:
         referred_by_id: int | None = None,
         *,
         group_id: int = 0,
+        generate_api_key: bool = True,
     ) -> Tenant:
         while True:
             code = _generate_referral_code()
@@ -150,7 +157,28 @@ class TenantRepository:
         )
         self.session.add(tenant)
         await self.session.flush()
+        if generate_api_key:
+            tenant.api_key = await self._ensure_api_key(tenant.id)
         return tenant
+
+    async def create_tenant(
+        self,
+        owner_tg_id: int,
+        company_name: str,
+        referred_by_id: int | None = None,
+        *,
+        group_id: int = 0,
+    ) -> Tenant:
+        return await self.create(
+            owner_tg_id=owner_tg_id,
+            company_name=company_name,
+            referred_by_id=referred_by_id,
+            group_id=group_id,
+            generate_api_key=True,
+        )
+
+    async def get_tenants_by_owner(self, owner_tg_id: int) -> list[Tenant]:
+        return await self.get_by_owner(owner_tg_id)
 
     async def _ensure_api_key(self, tenant_id: int) -> str:
         """Генерирует API ключ если его ещё нет. Возвращает ключ."""
@@ -159,7 +187,7 @@ class TenantRepository:
             return tenant.api_key
         while True:
             key = secrets.token_urlsafe(32)
-            existing = await self.get_by_api_key(key)
+            existing = await self.get_by_api_key_any(key)
             if not existing:
                 break
         await self.session.execute(

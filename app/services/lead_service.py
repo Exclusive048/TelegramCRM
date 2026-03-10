@@ -59,6 +59,10 @@ class LeadService:
         manager_tg_id: int,
         source_ref: MessageRef | None,
     ) -> Lead | None:
+        if self.tenant_id is not None:
+            in_tenant = await self.repo.get_by_id(lead_id, tenant_id=self.tenant_id)
+            if not in_tenant:
+                return None
         manager = await self._get_manager(manager_tg_id)
         if manager_tg_id and not manager:
             return None
@@ -80,6 +84,10 @@ class LeadService:
         amount: float | None,
         source_ref: MessageRef | None,
     ) -> Lead | None:
+        if self.tenant_id is not None:
+            in_tenant = await self.repo.get_by_id(lead_id, tenant_id=self.tenant_id)
+            if not in_tenant:
+                return None
         manager = await self._get_manager(manager_tg_id)
         if manager_tg_id and not manager:
             return None
@@ -106,6 +114,10 @@ class LeadService:
         manager_tg_id: int,
         source_ref: MessageRef | None,
     ) -> Lead | None:
+        if self.tenant_id is not None:
+            in_tenant = await self.repo.get_by_id(lead_id, tenant_id=self.tenant_id)
+            if not in_tenant:
+                return None
         manager = await self._get_manager(manager_tg_id)
         if manager_tg_id and not manager:
             return None
@@ -132,6 +144,10 @@ class LeadService:
         reason: str = "",
         source_ref: MessageRef | None = None,
     ) -> Lead | None:
+        if self.tenant_id is not None:
+            in_tenant = await self.repo.get_by_id(lead_id, tenant_id=self.tenant_id)
+            if not in_tenant:
+                return None
         manager = await self._get_manager(manager_tg_id)
         if manager_tg_id and not manager:
             return None
@@ -165,6 +181,7 @@ class LeadService:
             "service": lead.service,
             "comment": lead.comment or "",
             "status": LeadStatus.NEW,
+            "tenant_id": self.tenant_id if self.tenant_id is not None else lead.tenant_id,
         }
         clone = await self.repo.create(data)
         logger.info(f"lead_action=clone source_id={lead_id} clone_id={clone.id}")
@@ -242,7 +259,7 @@ class LeadService:
                 is_active=False,
             )
 
-        text_rendered, keyboard = self._build_card_payload(lead)
+        text_rendered, keyboard = await self._build_card_payload(lead)
         if not is_active:
             keyboard = None
 
@@ -261,14 +278,17 @@ class LeadService:
             logger.warning(f"lead_refresh lead_id={lead_id} active_ref=None")
             return
 
-        text_rendered, keyboard = self._build_card_payload(lead)
+        text_rendered, keyboard = await self._build_card_payload(lead)
         ok = await edit_text(self.sender, ref, text_rendered, keyboard)
         logger.info(f"lead_refresh lead_id={lead_id} ref={ref} ok={ok}")
 
     async def _get_manager(self, manager_tg_id: int) -> Manager | None:
         if not manager_tg_id:
             return None
-        return await self.repo.get_manager_by_tg_id(manager_tg_id)
+        return await self.repo.get_manager_by_tg_id(
+            manager_tg_id,
+            tenant_id=self.tenant_id,
+        )
 
     async def _topic_for_status(self, status: LeadStatus) -> int | None:
         if not self.group_id:
@@ -282,8 +302,10 @@ class LeadService:
             thread_id=None,
         )
 
-    def _build_card_payload(self, lead: Lead) -> tuple[str, InlineKeyboardMarkup]:
-        text = format_lead_card(lead)
+    async def _build_card_payload(self, lead: Lead) -> tuple[str, InlineKeyboardMarkup]:
+        reminder = await self.repo.get_active_reminder(lead.id)
+        reminder_at = reminder.remind_at if reminder else None
+        text = format_lead_card(lead, reminder_at=reminder_at)
         keyboard = make_lead_keyboard(lead.id, lead.status)
         return text, keyboard
 
@@ -319,7 +341,7 @@ class LeadService:
         lead_full = await self.repo.get_by_id(lead.id, tenant_id=self.tenant_id)
         if not lead_full:
             return None
-        text, keyboard = self._build_card_payload(lead_full)
+        text, keyboard = await self._build_card_payload(lead_full)
         try:
             msg = await self.sender.send_message(
                 chat_id=self.group_id,

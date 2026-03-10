@@ -238,6 +238,9 @@ class Reminder(Base):
     remind_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     message: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_sent: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_processing: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    processing_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    retry_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     lead: Mapped["Lead"] = relationship("Lead", back_populates="reminders")
