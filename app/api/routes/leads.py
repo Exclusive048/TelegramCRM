@@ -165,9 +165,9 @@ async def _create_lead_atomic(*, tenant, sender, payload: dict):
         try:
             if tenant and tenant.max_leads_per_month != -1:
                 tenant_repo = TenantRepository(session)
-                new_count = await tenant_repo.increment_leads_count(tenant.id)
-                if new_count > tenant.max_leads_per_month:
-                    raise _quota_limit_error(tenant.max_leads_per_month)
+                allowed, _, limit = await tenant_repo.try_reserve_monthly_lead_quota(tenant.id)
+                if not allowed:
+                    raise _quota_limit_error(limit)
 
             repo = LeadRepository(session)
             service = LeadService(repo, sender, group_id=group_id, tenant_id=tenant_id)

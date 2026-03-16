@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 import secrets
 import string
 
-from sqlalchemy import exists, func, or_, select, update
+from sqlalchemy import case, exists, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -12,7 +12,7 @@ from app.db.utils import _naive
 
 
 def _generate_referral_code() -> str:
-    """Р“РµРЅРµСЂРёСЂСѓРµС‚ РєРѕСЂРѕС‚РєРёР№ С‡РёС‚Р°РµРјС‹Р№ СЂРµС„РµСЂР°Р»СЊРЅС‹Р№ РєРѕРґ: 8 СЃРёРјРІРѕР»РѕРІ A-Z0-9."""
+    """Р вЂњР ВµР Р…Р ВµРЎР‚Р С‘РЎР‚РЎС“Р ВµРЎвЂљ Р С”Р С•РЎР‚Р С•РЎвЂљР С”Р С‘Р в„– РЎвЂЎР С‘РЎвЂљР В°Р ВµР СРЎвЂ№Р в„– РЎР‚Р ВµРЎвЂћР ВµРЎР‚Р В°Р В»РЎРЉР Р…РЎвЂ№Р в„– Р С”Р С•Р Т‘: 8 РЎРѓР С‘Р СР Р†Р С•Р В»Р С•Р Р† A-Z0-9."""
     alphabet = string.ascii_uppercase + string.digits
     return "".join(secrets.choice(alphabet) for _ in range(8))
 
@@ -28,7 +28,7 @@ class TenantRepository:
         return result.scalar_one_or_none()
 
     async def bind_group(self, tenant_id: int, group_id: int) -> None:
-        """РџСЂРёРІСЏР·Р°С‚СЊ РіСЂСѓРїРїСѓ Рє С‚РµРЅР°РЅС‚Сѓ. Р’С‹Р·С‹РІР°РµС‚СЃСЏ РїСЂРё /setup."""
+        """Р СџРЎР‚Р С‘Р Р†РЎРЏР В·Р В°РЎвЂљРЎРЉ Р С–РЎР‚РЎС“Р С—Р С—РЎС“ Р С” РЎвЂљР ВµР Р…Р В°Р Р…РЎвЂљРЎС“. Р вЂ™РЎвЂ№Р В·РЎвЂ№Р Р†Р В°Р ВµРЎвЂљРЎРѓРЎРЏ Р С—РЎР‚Р С‘ /setup."""
         await self.session.execute(
             update(Tenant).where(Tenant.id == tenant_id).values(
                 group_id=group_id
@@ -36,7 +36,7 @@ class TenantRepository:
         )
 
     async def complete_onboarding(self, tenant_id: int) -> None:
-        """РћС‚РјРµС‚РёС‚СЊ С‡С‚Рѕ /setup РІС‹РїРѕР»РЅРµРЅ СѓСЃРїРµС€РЅРѕ."""
+        """Р С›РЎвЂљР СР ВµРЎвЂљР С‘РЎвЂљРЎРЉ РЎвЂЎРЎвЂљР С• /setup Р Р†РЎвЂ№Р С—Р С•Р В»Р Р…Р ВµР Р… РЎС“РЎРѓР С—Р ВµРЎв‚¬Р Р…Р С•."""
         await self.session.execute(
             update(Tenant).where(Tenant.id == tenant_id).values(
                 onboarding_completed=True
@@ -51,7 +51,7 @@ class TenantRepository:
         sla_new_hours: int | None = None,
         sla_in_progress_days: int | None = None,
     ) -> None:
-        """РЈСЃС‚Р°РЅРѕРІРёС‚СЊ Р»РёРјРёС‚С‹ РїСЂРё СЃРјРµРЅРµ С‚Р°СЂРёС„Р°."""
+        """Р Р€РЎРѓРЎвЂљР В°Р Р…Р С•Р Р†Р С‘РЎвЂљРЎРЉ Р В»Р С‘Р СР С‘РЎвЂљРЎвЂ№ Р С—РЎР‚Р С‘ РЎРѓР СР ВµР Р…Р Вµ РЎвЂљР В°РЎР‚Р С‘РЎвЂћР В°."""
         values = {
             "max_leads_per_month": max_leads,
             "max_managers": max_managers,
@@ -64,37 +64,75 @@ class TenantRepository:
             update(Tenant).where(Tenant.id == tenant_id).values(**values)
         )
 
-    async def increment_leads_count(self, tenant_id: int) -> int:
-        """
-        РЈРІРµР»РёС‡РёС‚СЊ СЃС‡С‘С‚С‡РёРє Р»РёРґРѕРІ Р·Р° РјРµСЃСЏС†.
-        РђРІС‚РѕРјР°С‚РёС‡РµСЃРєРё СЃР±СЂР°СЃС‹РІР°РµС‚ СЃС‡С‘С‚С‡РёРє РµСЃР»Рё РЅР°СЃС‚СѓРїРёР» РЅРѕРІС‹Р№ РјРµСЃСЏС†.
-        Р’РѕР·РІСЂР°С‰Р°РµС‚ РЅРѕРІРѕРµ Р·РЅР°С‡РµРЅРёРµ СЃС‡С‘С‚С‡РёРєР°.
-        """
-        from datetime import datetime, timezone
-        tenant = await self.get_by_id(tenant_id)
-        if not tenant:
-            return 0
-        now = datetime.now(timezone.utc)
+    @staticmethod
+    def _monthly_counter_expressions(now_naive: datetime):
+        month_start = datetime(now_naive.year, now_naive.month, 1)
+        needs_reset = or_(
+            Tenant.leads_month_reset_at.is_(None),
+            Tenant.leads_month_reset_at < month_start,
+        )
+        next_count = case(
+            (needs_reset, 1),
+            else_=func.coalesce(Tenant.leads_this_month, 0) + 1,
+        )
+        next_reset_at = case(
+            (needs_reset, now_naive),
+            else_=Tenant.leads_month_reset_at,
+        )
+        return next_count, next_reset_at
 
-        # РЎР±СЂРѕСЃ СЃС‡С‘С‚С‡РёРєР° РµСЃР»Рё РЅР°СЃС‚СѓРїРёР» РЅРѕРІС‹Р№ РјРµСЃСЏС†
-        if (tenant.leads_month_reset_at is None or
-                tenant.leads_month_reset_at.month != now.month or
-                tenant.leads_month_reset_at.year != now.year):
-            new_count = 1
-            await self.session.execute(
-                update(Tenant).where(Tenant.id == tenant_id).values(
-                    leads_this_month=1,
-                    leads_month_reset_at=_naive(now),
-                )
+    async def increment_leads_count(self, tenant_id: int) -> int:
+        """Atomically increments monthly lead counter and returns new value."""
+        now_naive = _naive(datetime.now(timezone.utc))
+        if now_naive is None:
+            return 0
+
+        next_count, next_reset_at = self._monthly_counter_expressions(now_naive)
+        result = await self.session.execute(
+            update(Tenant)
+            .where(Tenant.id == tenant_id)
+            .values(
+                leads_this_month=next_count,
+                leads_month_reset_at=next_reset_at,
             )
-        else:
-            new_count = (tenant.leads_this_month or 0) + 1
-            await self.session.execute(
-                update(Tenant).where(Tenant.id == tenant_id).values(
-                    leads_this_month=new_count,
-                )
+            .returning(Tenant.leads_this_month)
+        )
+        new_count = result.scalar_one_or_none()
+        return int(new_count) if new_count is not None else 0
+
+    async def try_reserve_monthly_lead_quota(self, tenant_id: int) -> tuple[bool, int, int]:
+        """
+        Atomically checks quota and reserves one lead slot for current month.
+        Returns: (allowed, new_or_current_count, max_limit).
+        """
+        now_naive = _naive(datetime.now(timezone.utc))
+        if now_naive is None:
+            raise ValueError("Failed to build current timestamp")
+
+        next_count, next_reset_at = self._monthly_counter_expressions(now_naive)
+        result = await self.session.execute(
+            update(Tenant)
+            .where(
+                Tenant.id == tenant_id,
+                or_(
+                    Tenant.max_leads_per_month == -1,
+                    next_count <= Tenant.max_leads_per_month,
+                ),
             )
-        return new_count
+            .values(
+                leads_this_month=next_count,
+                leads_month_reset_at=next_reset_at,
+            )
+            .returning(Tenant.leads_this_month, Tenant.max_leads_per_month)
+        )
+        row = result.first()
+        if row is not None:
+            return True, int(row[0]), int(row[1])
+
+        tenant = await self.get_by_id(tenant_id)
+        if tenant is None:
+            raise ValueError(f"Tenant not found: {tenant_id}")
+        return False, int(tenant.leads_this_month or 0), int(tenant.max_leads_per_month)
 
     async def get_by_owner(self, owner_tg_id: int) -> list[Tenant]:
         result = await self.session.execute(
@@ -216,7 +254,7 @@ class TenantRepository:
         return await self.get_by_owner(owner_tg_id)
 
     async def _ensure_api_key(self, tenant_id: int) -> str:
-        """Р“РµРЅРµСЂРёСЂСѓРµС‚ API РєР»СЋС‡ РµСЃР»Рё РµРіРѕ РµС‰С‘ РЅРµС‚. Р’РѕР·РІСЂР°С‰Р°РµС‚ РєР»СЋС‡."""
+        """Р вЂњР ВµР Р…Р ВµРЎР‚Р С‘РЎР‚РЎС“Р ВµРЎвЂљ API Р С”Р В»РЎР‹РЎвЂЎ Р ВµРЎРѓР В»Р С‘ Р ВµР С–Р С• Р ВµРЎвЂ°РЎвЂ Р Р…Р ВµРЎвЂљ. Р вЂ™Р С•Р В·Р Р†РЎР‚Р В°РЎвЂ°Р В°Р ВµРЎвЂљ Р С”Р В»РЎР‹РЎвЂЎ."""
         tenant = await self.get_by_id(tenant_id)
         if tenant.api_key:
             return tenant.api_key
@@ -306,7 +344,7 @@ class TenantRepository:
         return bool(tenant_used)
 
     async def activate_subscription(self, tenant_id: int, days: int = 30) -> tuple[datetime, str]:
-        """РџСЂРѕРґР»РµРІР°РµС‚ РїРѕРґРїРёСЃРєСѓ. Р’РѕР·РІСЂР°С‰Р°РµС‚ (РЅРѕРІР°СЏ_РґР°С‚Р°, api_key)."""
+        """Р СџРЎР‚Р С•Р Т‘Р В»Р ВµР Р†Р В°Р ВµРЎвЂљ Р С—Р С•Р Т‘Р С—Р С‘РЎРѓР С”РЎС“. Р вЂ™Р С•Р В·Р Р†РЎР‚Р В°РЎвЂ°Р В°Р ВµРЎвЂљ (Р Р…Р С•Р Р†Р В°РЎРЏ_Р Т‘Р В°РЎвЂљР В°, api_key)."""
         tenant = await self.get_by_id(tenant_id)
         now = datetime.now(timezone.utc)
         base = max(tenant.subscription_until or now, now)
@@ -374,7 +412,7 @@ class TenantRepository:
         return list(result.scalars().all())
 
     async def get_referral_stats(self, tenant_id: int) -> dict:
-        """РЎС‚Р°С‚РёСЃС‚РёРєР° СЂРµС„РµСЂР°Р»РѕРІ РґР»СЏ РґР°РЅРЅРѕРіРѕ С‚РµРЅР°РЅС‚Р°."""
+        """Р РЋРЎвЂљР В°РЎвЂљР С‘РЎРѓРЎвЂљР С‘Р С”Р В° РЎР‚Р ВµРЎвЂћР ВµРЎР‚Р В°Р В»Р С•Р Р† Р Т‘Р В»РЎРЏ Р Т‘Р В°Р Р…Р Р…Р С•Р С–Р С• РЎвЂљР ВµР Р…Р В°Р Р…РЎвЂљР В°."""
         result = await self.session.execute(
             select(Tenant).where(Tenant.referred_by_id == tenant_id)
         )
