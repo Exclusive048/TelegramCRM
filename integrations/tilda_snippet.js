@@ -1,100 +1,81 @@
 /**
- * CRM Bot — Интеграция с любым сайтом
- * 
- * УСТАНОВКА:
- * 1. Вставьте этот код на страницу (в тег <script> или в менеджер тегов)
- * 2. Замените CRM_WEBHOOK_URL на ваш URL
- * 3. Замените CRM_API_KEY на ваш ключ
- * 
- * Для Tilda:
- *   Настройки сайта → Формы → После отправки → Webhook
- *   Вставьте URL: https://your-domain.com/api/v1/leads/tilda
- *   И добавьте заголовок: X-API-Key: YOUR_KEY
- *   Пример:
- *   fetch('https://your-domain.com/api/v1/leads/tilda', {
- *     method: 'POST',
- *     headers: { 'X-API-Key': 'YOUR_KEY' },
- *     body: formData
- *   })
- * 
- * Для других сайтов — используйте код ниже:
+ * TelegramCRM + Tilda integration (secure mode)
+ *
+ * IMPORTANT:
+ * - Do NOT place `X-API-Key` in browser JavaScript.
+ * - Do NOT call TelegramCRM ingest API directly from browser.
+ * - Browser should only call YOUR backend proxy endpoint (same-origin).
+ *
+ * Safe options:
+ * 1) Preferred for Tilda: configure Tilda server-side Webhook in Tilda admin.
+ *    Tilda admin stores secret; browser never sees the key.
+ * 2) Generic websites: browser -> your backend proxy -> TelegramCRM ingest API.
+ *
+ * This file contains ONLY browser-side proxy call example (no secrets).
  */
 
-const CRM_WEBHOOK_URL = 'https://your-domain.com/api/v1/leads';
-const CRM_API_KEY = 'your_api_secret_key';
+// Browser sends lead data only to your backend endpoint (same-origin recommended).
+const CRM_PROXY_URL = '/crm/ingest/lead';
 
 /**
- * Отправить лид в CRM
- * @param {Object} leadData - данные клиента
+ * Send lead to your backend proxy.
+ * Your backend must attach secret X-API-Key and forward to TelegramCRM.
  */
-async function sendLeadToCRM(leadData) {
+async function sendLeadToProxy(leadData) {
   try {
-    const response = await fetch(CRM_WEBHOOK_URL, {
+    const response = await fetch(CRM_PROXY_URL, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-API-Key': CRM_API_KEY,
       },
       body: JSON.stringify({
-        name:         leadData.name    || '—',
-        phone:        leadData.phone   || '—',
-        source:       leadData.source  || 'website',
-        comment:      leadData.comment || 'Заявка с сайта',
-        service:      leadData.service || null,
+        name: leadData.name || '—',
+        phone: leadData.phone || '—',
+        source: leadData.source || 'website',
+        comment: leadData.comment || 'Заявка с сайта',
+        service: leadData.service || null,
         utm_campaign: getUTM('utm_campaign'),
-        utm_source:   getUTM('utm_source'),
-        extra:        leadData.extra   || null,
+        utm_source: getUTM('utm_source'),
+        extra: leadData.extra || null,
       }),
+      credentials: 'same-origin',
     });
 
     if (!response.ok) {
-      console.error('CRM error:', await response.text());
+      console.error('Proxy error:', await response.text());
       return false;
     }
+
     return true;
-  } catch (e) {
-    console.error('CRM send failed:', e);
+  } catch (error) {
+    console.error('Proxy send failed:', error);
     return false;
   }
 }
 
-/** Получить UTM-метку из URL */
 function getUTM(key) {
   return new URLSearchParams(window.location.search).get(key) || null;
 }
 
-// ─── Примеры подключения к популярным формам ──────────
-
-// 1. Обычная HTML-форма
-document.addEventListener('DOMContentLoaded', function() {
-  const form = document.querySelector('#contact-form'); // замените на ваш селектор
+// Example: plain HTML form -> backend proxy.
+document.addEventListener('DOMContentLoaded', function () {
+  const form = document.querySelector('#contact-form');
   if (!form) return;
 
-  form.addEventListener('submit', async function(e) {
-    e.preventDefault();
+  form.addEventListener('submit', async function (event) {
+    event.preventDefault();
     const data = new FormData(form);
 
-    const ok = await sendLeadToCRM({
-      name:    data.get('name'),
-      phone:   data.get('phone'),
+    const ok = await sendLeadToProxy({
+      name: data.get('name'),
+      phone: data.get('phone'),
       comment: data.get('message') || 'Заявка с сайта',
       service: data.get('service'),
-      source:  'website',
+      source: 'website',
     });
 
     if (ok) {
-      // Показать успех
       form.innerHTML = '<p>✅ Спасибо! Мы свяжемся с вами.</p>';
     }
   });
 });
-
-// 2. WordPress Contact Form 7
-// document.addEventListener('wpcf7mailsent', function(e) {
-//   sendLeadToCRM({
-//     name:    e.detail.inputs.find(i => i.name === 'your-name')?.value,
-//     phone:   e.detail.inputs.find(i => i.name === 'your-phone')?.value,
-//     comment: e.detail.inputs.find(i => i.name === 'your-message')?.value,
-//     source:  'website_cf7',
-//   });
-// });

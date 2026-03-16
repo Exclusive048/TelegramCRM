@@ -19,6 +19,16 @@ def _set_tenant_state(request: Request, tenant: Tenant, scope: Literal["ingest",
     request.state.api_scope = scope
 
 
+def _assert_not_browser_request(request: Request) -> None:
+    # Browser cross-origin requests include Origin.
+    # Ingest API is expected to be called server-to-server only.
+    if request.headers.get("origin"):
+        raise HTTPException(
+            status_code=403,
+            detail="Ingest API is server-to-server only. Use backend proxy or Tilda server webhook.",
+        )
+
+
 async def verify_ingest_api_key(request: Request, x_api_key: str = Header(...)) -> None:
     """
     Authorize ingest endpoints by tenant ingest key (`X-API-Key`).
@@ -32,6 +42,11 @@ async def verify_ingest_api_key(request: Request, x_api_key: str = Header(...)) 
 
     _assert_subscription_active(tenant)
     _set_tenant_state(request, tenant, "ingest")
+
+
+async def verify_ingest_server_api_key(request: Request, x_api_key: str = Header(...)) -> None:
+    await verify_ingest_api_key(request=request, x_api_key=x_api_key)
+    _assert_not_browser_request(request)
 
 
 async def verify_management_api_key(

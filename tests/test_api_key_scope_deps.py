@@ -35,8 +35,11 @@ class _FakeRepo:
         return None
 
 
-def _request() -> Request:
-    return Request({"type": "http", "method": "GET", "path": "/", "headers": []})
+def _request(*, origin: str | None = None) -> Request:
+    headers: list[tuple[bytes, bytes]] = []
+    if origin:
+        headers.append((b"origin", origin.encode("utf-8")))
+    return Request({"type": "http", "method": "GET", "path": "/", "headers": headers})
 
 
 def _active_tenant(tenant_id: int) -> Tenant:
@@ -70,6 +73,47 @@ def test_verify_ingest_api_key_sets_ingest_scope(monkeypatch) -> None:
 
     request = _request()
     asyncio.run(deps.verify_ingest_api_key(request=request, x_api_key="ingest-key"))
+
+    assert request.state.tenant_id == tenant.id
+    assert request.state.api_scope == "ingest"
+
+
+def test_verify_ingest_server_api_key_rejects_browser_origin(monkeypatch) -> None:
+    tenant = _active_tenant(11)
+    repo = _FakeRepo(ingest_tenant=tenant)
+
+    monkeypatch.setattr(deps, "AsyncSessionLocal", lambda: _FakeSessionContext())
+    monkeypatch.setattr(deps, "TenantRepository", lambda session: repo)
+
+    request = _request(origin="https://site.example")
+    try:
+        asyncio.run(
+            deps.verify_ingest_server_api_key(
+                request=request,
+                x_api_key="ingest-key",
+            )
+        )
+    except HTTPException as exc:
+        assert exc.status_code == 403
+        assert "server-to-server" in exc.detail
+    else:
+        raise AssertionError("Expected HTTPException for browser-origin ingest call")
+
+
+def test_verify_ingest_server_api_key_accepts_server_request(monkeypatch) -> None:
+    tenant = _active_tenant(12)
+    repo = _FakeRepo(ingest_tenant=tenant)
+
+    monkeypatch.setattr(deps, "AsyncSessionLocal", lambda: _FakeSessionContext())
+    monkeypatch.setattr(deps, "TenantRepository", lambda session: repo)
+
+    request = _request()
+    asyncio.run(
+        deps.verify_ingest_server_api_key(
+            request=request,
+            x_api_key="ingest-key",
+        )
+    )
 
     assert request.state.tenant_id == tenant.id
     assert request.state.api_scope == "ingest"

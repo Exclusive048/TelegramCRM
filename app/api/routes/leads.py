@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.rate_limit import limiter
 from app.api.deps import (
     get_current_sender,
-    verify_ingest_api_key,
+    verify_ingest_server_api_key,
     verify_management_api_key,
 )
 from app.api.schemas.lead_schemas import (
@@ -184,7 +184,7 @@ async def _create_lead_atomic(*, tenant, sender, payload: dict):
 async def create_lead(
     body: LeadCreateRequest,
     request: Request,
-    _: None = Depends(verify_ingest_api_key),
+    _: None = Depends(verify_ingest_server_api_key),
     sender=Depends(get_current_sender),
 ):
     tenant = request.state.tenant
@@ -206,7 +206,7 @@ async def create_lead(
 @limiter.limit("60/minute")
 async def tilda_webhook(
     request: Request,
-    _: None = Depends(verify_ingest_api_key),
+    _: None = Depends(verify_ingest_server_api_key),
     sender=Depends(get_current_sender),
 ):
     """

@@ -420,9 +420,13 @@ async def cb_acc_keys(callback: CallbackQuery):
     async with AsyncSessionLocal() as session:
         repo = TenantRepository(session)
         tenant = await repo.get_by_id(tenant_id)
-    if not tenant or tenant.owner_tg_id != callback.from_user.id:
-        await callback.answer("в›”пёЏ РќРµ РЅР°Р№РґРµРЅРѕ.", show_alert=True)
-        return
+        if not tenant or tenant.owner_tg_id != callback.from_user.id:
+            await callback.answer("⛔️ Не найдено.", show_alert=True)
+            return
+        if not tenant.management_api_key:
+            tenant.management_api_key = await repo.ensure_management_api_key(tenant_id)
+            await session.commit()
+            await session.refresh(tenant)
     await callback.answer()
 
     domain = settings.public_domain or "YOUR_DOMAIN"
@@ -430,28 +434,26 @@ async def cb_acc_keys(callback: CallbackQuery):
 
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(
-        text="в¬…пёЏ РќР°Р·Р°Рґ", callback_data=f"acc:detail:{tenant_id}"
+        text="⬅️ Назад", callback_data=f"acc:detail:{tenant_id}"
     ))
 
     await callback.message.edit_text(
-        f"рџ”‘ <b>API РєР»СЋС‡Рё вЂ” {tenant.company_name}</b>\n\n"
+        f"🔑 <b>API ключи — {tenant.company_name}</b>\n\n"
         f"<b>Ingest API key (X-API-Key):</b>\n"
         f"<code>{tenant.api_key or '—'}</code>\n\n"
         f"<b>Management API key (X-Management-API-Key):</b>\n"
         f"<code>{tenant.management_api_key or '—'}</code>\n\n"
-        f"<b>Webhook URL РґР»СЏ Tilda:</b>\n"
+        f"<b>Webhook URL для Tilda:</b>\n"
         f"<code>{webhook_url}</code>\n\n"
-        "Ingest-запросы отправляйте с заголовком:\n"
-        "<code>X-API-Key: Р’РђРЁ_РљР›Р®Р§</code>\n\n"
+        "Ingest-запросы отправляйте только server-to-server с заголовком:\n"
+        "<code>X-API-Key: ВАШ_КЛЮЧ</code>\n\n"
         "Management-запросы отправляйте с заголовком:\n"
         "<code>X-Management-API-Key: ВАШ_КЛЮЧ</code>\n\n"
-        "вљ пёЏ РќРµ РїРµСЂРµРґР°РІР°Р№С‚Рµ РєР»СЋС‡ С‚СЂРµС‚СЊРёРј Р»РёС†Р°Рј.",
+        "⛔️ Никогда не вставляйте ingest API key в браузерный JS-код.\n"
+        "Используйте Tilda webhook (настройки Tilda) или ваш backend proxy.",
         reply_markup=builder.as_markup(),
         parse_mode="HTML",
     )
-
-
-# в”Ђв”Ђ Р РµС„РµСЂР°Р»СЊРЅР°СЏ РїСЂРѕРіСЂР°РјРјР° в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 @router.callback_query(F.data.startswith("acc:ref:"))
 async def cb_acc_ref(callback: CallbackQuery):
@@ -548,20 +550,20 @@ async def _send_activation_message(
 
     if api_key:
         await message.answer(
-            f"рџ”‘ <b>Р’Р°С€Рё РєР»СЋС‡Рё РґР»СЏ РёРЅС‚РµРіСЂР°С†РёР№</b>\n\n"
+            f"🔑 <b>Ваши ключи для интеграций</b>\n\n"
             f"<b>Ingest API key (X-API-Key):</b>\n<code>{api_key}</code>\n\n"
             f"<b>Management API key (X-Management-API-Key):</b>\n"
             f"<code>{tenant.management_api_key or '—'}</code>\n\n"
-            f"<b>Webhook URL (Tilda Рё РґСЂ.):</b>\n<code>{webhook_url}</code>\n\n"
-            "Ingest-запросы отправляйте с заголовком:\n"
-            "<code>X-API-Key: Р’РђРЁ_РљР›Р®Р§</code>\n\n"
+            f"<b>Webhook URL (Tilda и др.):</b>\n<code>{webhook_url}</code>\n\n"
+            "Ingest-запросы отправляйте только server-to-server с заголовком:\n"
+            "<code>X-API-Key: ВАШ_КЛЮЧ</code>\n\n"
             "Management-запросы отправляйте с заголовком:\n"
             "<code>X-Management-API-Key: ВАШ_КЛЮЧ</code>\n\n"
-            "вљ пёЏ РЎРѕС…СЂР°РЅРёС‚Рµ РєР»СЋС‡ вЂ” РѕРЅ РЅРµ Р±СѓРґРµС‚ РїРѕРєР°Р·Р°РЅ РїРѕРІС‚РѕСЂРЅРѕ РІ РѕС‚РєСЂС‹С‚РѕРј РІРёРґРµ.\n"
-            "РџРѕСЃРјРѕС‚СЂРµС‚СЊ СЃРЅРѕРІР°: /api_keys",
+            "⛔️ Не вставляйте ingest API key в client-side JS.\n"
+            "Только server-side интеграция: Tilda webhook или backend proxy.\n\n"
+            "⚠️ Сохраните ключи — они не должны попадать в публичный код.",
             parse_mode="HTML",
         )
-
     await message.answer(
         f"вќ“ <b>РќСѓР¶РЅР° РїРѕРјРѕС‰СЊ?</b>\n\n"
         f"РџРѕРґРґРµСЂР¶РєР°: {settings.support_username}\n"

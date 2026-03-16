@@ -1,4 +1,4 @@
-﻿"""
+"""
 /cabinet вЂ” РєР°Р±РёРЅРµС‚ Р°РґРјРёРЅРёСЃС‚СЂРёСЂРѕРІР°РЅРёСЏ.
 Р”РѕСЃС‚СѓРїРµРЅ С‚РѕР»СЊРєРѕ CRM-Р°РґРјРёРЅРёСЃС‚СЂР°С‚РѕСЂР°Рј.
 """
@@ -625,7 +625,8 @@ async def cab_integrations(callback: CallbackQuery, sender: TelegramSafeSender, 
         "рџ”— <b>Webhook РґР»СЏ Tilda</b>\n"
         f"POST {escaped_url}\n"
         f"X-API-Key: {escaped_key}\n"
-        "рџ“‹ JS-СЃРЅРёРїРїРµС‚ РѕС‚РїСЂР°РІР»РµРЅ С„Р°Р№Р»РѕРј"
+        "⚠️ Не вставляйте API-ключ в браузерный JS.\n"
+        "рџ“‹ Ниже отправлен безопасный proxy-сниппет (без секрета в браузере)."
     )
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text="рџ“‹ РЎРєРѕРїРёСЂРѕРІР°С‚СЊ СЃСЃС‹Р»РєСѓ", callback_data="cab:copy_webhook"))
@@ -644,7 +645,7 @@ async def cab_integrations(callback: CallbackQuery, sender: TelegramSafeSender, 
             chat_id=callback.message.chat.id,
             message_thread_id=callback.message.message_thread_id,
             document=snippet,
-            caption="JS-СЃРЅРёРїРїРµС‚ РґР»СЏ Tilda",
+            caption="Proxy-сниппет для Tilda (без client-side ключа)",
             parse_mode=None,
             ttl_sec=TTL_MENU_SEC,
         )
