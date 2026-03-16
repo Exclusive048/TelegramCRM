@@ -21,6 +21,7 @@ from app.bot.ui.panel import (
 from app.bot.utils.handler_helpers import resolve_admin_context
 from app.db.database import AsyncSessionLocal
 from app.db.repositories.lead_repository import LeadRepository
+from app.db.repositories.tenant_repository import TenantRepository
 from app.db.repositories.tenant_topics import TenantTopicRepository
 from app.telegram.safe_sender import TelegramSafeSender
 
@@ -54,6 +55,13 @@ async def _probe_topic_thread(sender: TelegramSafeSender, chat_id: int, thread_i
 
 class PanelAddManagerState(StatesGroup):
     waiting_for_contact = State()
+
+
+async def _resolve_panel_tenant(session, tenant, group_id: int):
+    if tenant and getattr(tenant, "id", None) is not None:
+        return tenant
+    tenant_repo = TenantRepository(session)
+    return await tenant_repo.get_by_group_id(group_id)
 
 
 async def _pin_panel_message(sender: TelegramSafeSender, chat_id: int, topic_id: int, message_id: int):
@@ -238,6 +246,13 @@ async def handle_panel_actions(callback: CallbackQuery, state: FSMContext, sende
 
     async with AsyncSessionLocal() as session:
         repo = LeadRepository(session)
+        resolved_tenant = await _resolve_panel_tenant(session, tenant, group_id)
+        if resolved_tenant is None:
+            logger.warning(f"panel action rejected: tenant not resolved for group_id={group_id}")
+            await sender.answer(callback, "⚠️ Не удалось определить tenant для этого чата.", show_alert=True)
+            return
+        tenant_id = resolved_tenant.id
+
         topic_id = await resolve_topic_thread_id(
             group_id,
             TopicKey.MANAGERS,
@@ -254,7 +269,7 @@ async def handle_panel_actions(callback: CallbackQuery, state: FSMContext, sende
             text = render_panel_home()
             keyboard = build_kb_panel_home()
         elif action == "panel_team":
-            managers = await repo.get_all_managers(include_inactive=True)
+            managers = await repo.get_all_managers(include_inactive=True, tenant_id=tenant_id)
             text = render_panel_team(managers)
             keyboard = build_kb_panel_team(managers)
         elif action == "team_add":
@@ -267,7 +282,7 @@ async def handle_panel_actions(callback: CallbackQuery, state: FSMContext, sende
             text = render_panel_team_add_prompt()
             keyboard = build_kb_panel_team_add_prompt()
         elif action == "team_cancel":
-            managers = await repo.get_all_managers(include_inactive=True)
+            managers = await repo.get_all_managers(include_inactive=True, tenant_id=tenant_id)
             text = render_panel_team(managers)
             keyboard = build_kb_panel_team(managers)
         else:
@@ -304,6 +319,13 @@ async def handle_manager_contact(message: Message, state: FSMContext, sender: Te
 
     async with AsyncSessionLocal() as session:
         repo = LeadRepository(session)
+        resolved_tenant = await _resolve_panel_tenant(session, tenant, group_id)
+        if resolved_tenant is None:
+            logger.warning(f"panel manager contact rejected: tenant not resolved for group_id={group_id}")
+            await state.clear()
+            return
+        tenant_id = resolved_tenant.id
+
         if not panel_topic_id:
             panel_topic_id = await resolve_topic_thread_id(
                 panel_chat_id,
@@ -373,11 +395,11 @@ async def handle_manager_contact(message: Message, state: FSMContext, sender: Te
                 pass
             return
 
-        if tenant and tenant.max_managers != -1:
-            current_count = await repo.count_active_managers(tenant_id=tenant.id)
-            if current_count >= tenant.max_managers:
+        if resolved_tenant.max_managers != -1:
+            current_count = await repo.count_active_managers(tenant_id=tenant_id)
+            if current_count >= resolved_tenant.max_managers:
                 text = (
-                    f"⚠️ В вашем плане максимум {tenant.max_managers} менеджеров ({tenant.plan}).\n"
+                    f"⚠️ В вашем плане максимум {resolved_tenant.max_managers} менеджеров ({resolved_tenant.plan}).\n"
                     "Оплатите расширение или смените тариф."
                 )
                 keyboard = build_kb_panel_team_add_prompt()
@@ -406,12 +428,12 @@ async def handle_manager_contact(message: Message, state: FSMContext, sender: Te
             tg_id=tg_id,
             name=name,
             username=username,
-            tenant_id=tenant.id if tenant else None,
+            tenant_id=tenant_id,
         )
         await session.commit()
         logger.info(f"Manager upserted from contact: {manager.name} (tg_id={manager.tg_id})")
 
-        managers = await repo.get_all_managers(include_inactive=True)
+        managers = await repo.get_all_managers(include_inactive=True, tenant_id=tenant_id)
         text = render_panel_team(managers)
         keyboard = build_kb_panel_team(managers)
 
