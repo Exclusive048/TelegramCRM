@@ -10,12 +10,19 @@ from aiogram.client.default import DefaultBotProperties
 from app.telegram.safe_sender import ChatRateLimiter, TelegramSafeSender
 
 
+def _set_if_blank(name: str, value: str) -> None:
+    current = os.getenv(name)
+    if current is None or not current.strip():
+        os.environ[name] = value
+
+
 def _ensure_env():
-    os.environ.setdefault("BOT_TOKEN", "123:TEST_TOKEN")
-    os.environ.setdefault("CRM_GROUP_ID", "1")
-    os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://user:pass@localhost:5432/db")
-    os.environ.setdefault("PUBLIC_DOMAIN", "example.com")
-    os.environ.setdefault("API_SECRET_KEY", "dev")
+    _set_if_blank("BOT_TOKEN", "123:TEST_TOKEN")
+    _set_if_blank("CRM_GROUP_ID", "1")
+    _set_if_blank("DATABASE_URL", "postgresql+asyncpg://user:pass@localhost:5432/db")
+    _set_if_blank("PUBLIC_DOMAIN", "example.com")
+    _set_if_blank("MASTER_ADMIN_TG_ID", "0")
+    _set_if_blank("API_SECRET_KEY", "dev")
 
 
 async def _close_bot(bot: Bot):

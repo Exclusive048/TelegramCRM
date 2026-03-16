@@ -1,4 +1,4 @@
-from pydantic import field_validator
+from pydantic import ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -31,6 +31,26 @@ class Settings(BaseSettings):
     yukassa_shop_id: str = ""
     yukassa_secret_key: str = ""
     yukassa_ip_whitelist: str = ""
+
+    @field_validator(
+        "master_admin_tg_id",
+        "api_port",
+        "sla_new_hours",
+        "sla_in_progress_days",
+        "subscription_price",
+        "subscription_days",
+        "trial_days",
+        "referral_bonus_days",
+        mode="before",
+    )
+    @classmethod
+    def normalize_empty_numeric_env(cls, v, info: ValidationInfo):
+        # Empty env values like MASTER_ADMIN_TG_ID="" should fall back to field default.
+        if isinstance(v, str) and not v.strip():
+            default = cls.model_fields[info.field_name].default
+            if default is not None:
+                return default
+        return v
 
     @field_validator("public_domain")
     @classmethod

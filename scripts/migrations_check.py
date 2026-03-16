@@ -9,11 +9,19 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _set_if_blank(name: str, value: str) -> None:
+    current = os.getenv(name)
+    if current is None or not current.strip():
+        os.environ[name] = value
+
+
 def _ensure_env():
-    os.environ.setdefault("BOT_TOKEN", "123:TEST_TOKEN")
-    os.environ.setdefault("CRM_GROUP_ID", "1")
-    os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///./_alembic_tmp.db")
-    os.environ.setdefault("API_SECRET_KEY", "dev")
+    _set_if_blank("BOT_TOKEN", "123:TEST_TOKEN")
+    _set_if_blank("CRM_GROUP_ID", "1")
+    _set_if_blank("DATABASE_URL", "sqlite+aiosqlite:///./_alembic_tmp.db")
+    _set_if_blank("PUBLIC_DOMAIN", "example.com")
+    _set_if_blank("MASTER_ADMIN_TG_ID", "0")
+    _set_if_blank("API_SECRET_KEY", "dev")
 
 
 def main() -> int:
