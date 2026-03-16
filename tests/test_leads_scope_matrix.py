@@ -17,9 +17,12 @@ def test_leads_routes_use_expected_scope_dependencies() -> None:
 
     create_block = _function_block(source, "create_lead")
     assert "Depends(verify_ingest_server_api_key)" in create_block
+    assert "_create_lead_atomic(" in create_block
 
     tilda_block = _function_block(source, "tilda_webhook")
     assert "Depends(verify_ingest_server_api_key)" in tilda_block
+    assert "_parse_tilda(data)" in tilda_block
+    assert "_create_lead_atomic(" in tilda_block
 
     get_leads_block = _function_block(source, "get_leads")
     assert "Depends(verify_management_api_key)" in get_leads_block
