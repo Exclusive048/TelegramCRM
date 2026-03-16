@@ -30,7 +30,12 @@ def main() -> int:
 
     bot = Bot(token=settings.bot_token, default=DefaultBotProperties(parse_mode="HTML"))
     sender = TelegramSafeSender(bot, limiter=ChatRateLimiter(min_delay_sec=1.1))
-    app = create_app(bot, sender, redis_url=settings.redis_url)
+    app = create_app(
+        bot,
+        sender,
+        redis_url=settings.redis_url,
+        use_redis=settings.use_redis,
+    )
 
     if not app:
         print("Smoke check failed: app is None")

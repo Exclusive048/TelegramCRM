@@ -11,11 +11,11 @@ from fastapi.responses import JSONResponse
 from loguru import logger
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
-from sqlalchemy import text
 
 from app.api.rate_limit import limiter
 from app.api.routes import leads as leads_router
 from app.api.routes import yukassa_webhook as yukassa_router
+from app.health_checks import run_readiness_checks
 from app.services.message_deletion_service import MessageDeletionService
 from app.telegram.safe_sender import ChatRateLimiter, TelegramSafeSender
 
@@ -39,7 +39,7 @@ def _get_body_limit(request: Request) -> int | None:
     return _BODY_LIMITS_BY_ROUTE.get(key)
 
 
-def create_app(bot: Bot, sender: TelegramSafeSender, *, redis_url: str) -> FastAPI:
+def create_app(bot: Bot, sender: TelegramSafeSender, *, redis_url: str, use_redis: bool) -> FastAPI:
     app = FastAPI(docs_url="/api/docs", redoc_url=None, title="TelegramCRM API", version="1.0")
     app.state.bot = bot
     app.state.sender = sender
@@ -90,24 +90,26 @@ def create_app(bot: Bot, sender: TelegramSafeSender, *, redis_url: str) -> FastA
         response.headers["X-Request-ID"] = request_id
         return response
 
+    @app.get("/live")
+    async def liveness():
+        return {"status": "ok"}
+
+    @app.get("/ready")
+    async def readiness():
+        from app.db.database import AsyncSessionLocal
+
+        result = await run_readiness_checks(
+            use_redis=use_redis,
+            redis_url=redis_url,
+            session_factory=AsyncSessionLocal,
+        )
+        if result["status"] == "ok":
+            return result
+        return JSONResponse(result, status_code=503)
+
     @app.get("/health")
     async def health():
-        from app.db.database import AsyncSessionLocal
-        from redis.asyncio import Redis
-
-        try:
-            async with AsyncSessionLocal() as s:
-                await s.execute(text("SELECT 1"))
-            r = Redis.from_url(redis_url)
-            await r.ping()
-            await r.aclose()
-            return {"status": "ok"}
-        except Exception:
-            logger.exception("Health check failed")
-            return JSONResponse(
-                {"status": "error", "code": "db_unavailable"},
-                status_code=503,
-            )
+        return await readiness()
 
     return app
 
