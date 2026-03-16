@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from datetime import datetime, timezone
 
@@ -246,9 +246,13 @@ async def cb_acc_detail(callback: CallbackQuery):
     async with AsyncSessionLocal() as session:
         repo = TenantRepository(session)
         tenant = await repo.get_by_id(tenant_id)
-    if not tenant or tenant.owner_tg_id != callback.from_user.id:
-        await callback.answer("в›”пёЏ РќРµ РЅР°Р№РґРµРЅРѕ.", show_alert=True)
-        return
+        if not tenant or tenant.owner_tg_id != callback.from_user.id:
+            await callback.answer("в›”пёЏ РќРµ РЅР°Р№РґРµРЅРѕ.", show_alert=True)
+            return
+        if not tenant.management_api_key:
+            tenant.management_api_key = await repo.ensure_management_api_key(tenant_id)
+            await session.commit()
+            await session.refresh(tenant)
     await callback.answer()
     await callback.message.edit_text(
         _tenant_detail_text(tenant),
@@ -431,12 +435,16 @@ async def cb_acc_keys(callback: CallbackQuery):
 
     await callback.message.edit_text(
         f"рџ”‘ <b>API РєР»СЋС‡Рё вЂ” {tenant.company_name}</b>\n\n"
-        f"<b>Р’Р°С€ API РєР»СЋС‡:</b>\n"
-        f"<code>{tenant.api_key}</code>\n\n"
+        f"<b>Ingest API key (X-API-Key):</b>\n"
+        f"<code>{tenant.api_key or '—'}</code>\n\n"
+        f"<b>Management API key (X-Management-API-Key):</b>\n"
+        f"<code>{tenant.management_api_key or '—'}</code>\n\n"
         f"<b>Webhook URL РґР»СЏ Tilda:</b>\n"
         f"<code>{webhook_url}</code>\n\n"
-        "Р’СЃС‚Р°РІСЊС‚Рµ API РєР»СЋС‡ РІ Р·Р°РіРѕР»РѕРІРѕРє Р·Р°РїСЂРѕСЃР°:\n"
+        "Ingest-запросы отправляйте с заголовком:\n"
         "<code>X-API-Key: Р’РђРЁ_РљР›Р®Р§</code>\n\n"
+        "Management-запросы отправляйте с заголовком:\n"
+        "<code>X-Management-API-Key: ВАШ_КЛЮЧ</code>\n\n"
         "вљ пёЏ РќРµ РїРµСЂРµРґР°РІР°Р№С‚Рµ РєР»СЋС‡ С‚СЂРµС‚СЊРёРј Р»РёС†Р°Рј.",
         reply_markup=builder.as_markup(),
         parse_mode="HTML",
@@ -541,10 +549,14 @@ async def _send_activation_message(
     if api_key:
         await message.answer(
             f"рџ”‘ <b>Р’Р°С€Рё РєР»СЋС‡Рё РґР»СЏ РёРЅС‚РµРіСЂР°С†РёР№</b>\n\n"
-            f"<b>API РєР»СЋС‡:</b>\n<code>{api_key}</code>\n\n"
+            f"<b>Ingest API key (X-API-Key):</b>\n<code>{api_key}</code>\n\n"
+            f"<b>Management API key (X-Management-API-Key):</b>\n"
+            f"<code>{tenant.management_api_key or '—'}</code>\n\n"
             f"<b>Webhook URL (Tilda Рё РґСЂ.):</b>\n<code>{webhook_url}</code>\n\n"
-            "Р”РѕР±Р°РІСЊС‚Рµ API РєР»СЋС‡ РІ Р·Р°РіРѕР»РѕРІРѕРє Р·Р°РїСЂРѕСЃР°:\n"
+            "Ingest-запросы отправляйте с заголовком:\n"
             "<code>X-API-Key: Р’РђРЁ_РљР›Р®Р§</code>\n\n"
+            "Management-запросы отправляйте с заголовком:\n"
+            "<code>X-Management-API-Key: ВАШ_КЛЮЧ</code>\n\n"
             "вљ пёЏ РЎРѕС…СЂР°РЅРёС‚Рµ РєР»СЋС‡ вЂ” РѕРЅ РЅРµ Р±СѓРґРµС‚ РїРѕРєР°Р·Р°РЅ РїРѕРІС‚РѕСЂРЅРѕ РІ РѕС‚РєСЂС‹С‚РѕРј РІРёРґРµ.\n"
             "РџРѕСЃРјРѕС‚СЂРµС‚СЊ СЃРЅРѕРІР°: /api_keys",
             parse_mode="HTML",

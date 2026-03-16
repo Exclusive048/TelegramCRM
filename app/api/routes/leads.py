@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from datetime import datetime
 
@@ -8,7 +8,11 @@ from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.rate_limit import limiter
-from app.api.deps import get_current_sender, verify_api_key
+from app.api.deps import (
+    get_current_sender,
+    verify_ingest_api_key,
+    verify_management_api_key,
+)
 from app.api.schemas.lead_schemas import (
     CreateLeadResponse,
     LeadCommentRequest,
@@ -180,7 +184,7 @@ async def _create_lead_atomic(*, tenant, sender, payload: dict):
 async def create_lead(
     body: LeadCreateRequest,
     request: Request,
-    _: None = Depends(verify_api_key),
+    _: None = Depends(verify_ingest_api_key),
     sender=Depends(get_current_sender),
 ):
     tenant = request.state.tenant
@@ -202,7 +206,7 @@ async def create_lead(
 @limiter.limit("60/minute")
 async def tilda_webhook(
     request: Request,
-    _: None = Depends(verify_api_key),
+    _: None = Depends(verify_ingest_api_key),
     sender=Depends(get_current_sender),
 ):
     """
@@ -249,7 +253,7 @@ async def get_leads(
     page: int = Query(1, ge=1),
     per_page: int = Query(50, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
-    _: None = Depends(verify_api_key),
+    _: None = Depends(verify_management_api_key),
 ):
     tenant = request.state.tenant
     tenant_id = tenant.id if tenant else None
@@ -280,7 +284,7 @@ async def get_lead(
     lead_id: int,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    _: None = Depends(verify_api_key),
+    _: None = Depends(verify_management_api_key),
 ):
     tenant = request.state.tenant
     tenant_id = tenant.id if tenant else None
@@ -299,7 +303,7 @@ async def update_lead(
     body: LeadUpdateRequest,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    _: None = Depends(verify_api_key),
+    _: None = Depends(verify_management_api_key),
     sender=Depends(get_current_sender),
 ):
     tenant = request.state.tenant
@@ -333,7 +337,7 @@ async def add_comment(
     body: LeadCommentRequest,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    _: None = Depends(verify_api_key),
+    _: None = Depends(verify_management_api_key),
     sender=Depends(get_current_sender),
 ):
     tenant = request.state.tenant

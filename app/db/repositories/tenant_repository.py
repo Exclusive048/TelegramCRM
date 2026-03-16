@@ -1,8 +1,8 @@
-﻿from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 import secrets
 import string
 
-from sqlalchemy import exists, select, update
+from sqlalchemy import exists, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -119,9 +119,23 @@ class TenantRepository:
         )
         return result.scalar_one_or_none()
 
+    async def get_by_management_api_key(self, api_key: str) -> Tenant | None:
+        result = await self.session.execute(
+            select(Tenant).where(
+                Tenant.management_api_key == api_key,
+                Tenant.is_active == True,
+            )
+        )
+        return result.scalar_one_or_none()
+
     async def get_by_api_key_any(self, api_key: str) -> Tenant | None:
         result = await self.session.execute(
-            select(Tenant).where(Tenant.api_key == api_key)
+            select(Tenant).where(
+                or_(
+                    Tenant.api_key == api_key,
+                    Tenant.management_api_key == api_key,
+                )
+            )
         )
         return result.scalar_one_or_none()
 
@@ -130,6 +144,25 @@ class TenantRepository:
             select(Tenant).where(Tenant.id == tenant_id)
         )
         return result.scalar_one_or_none()
+
+    async def get_tenant_ids_without_management_api_key(self, *, limit: int | None = None) -> list[int]:
+        stmt = (
+            select(Tenant.id)
+            .where(Tenant.management_api_key.is_(None))
+            .order_by(Tenant.id.asc())
+        )
+        if limit is not None:
+            stmt = stmt.limit(limit)
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def count_without_management_api_key(self) -> int:
+        result = await self.session.execute(
+            select(func.count())
+            .select_from(Tenant)
+            .where(Tenant.management_api_key.is_(None))
+        )
+        return int(result.scalar_one())
 
     async def create(
         self,
@@ -160,6 +193,7 @@ class TenantRepository:
         await self.session.flush()
         if generate_api_key:
             tenant.api_key = await self._ensure_api_key(tenant.id)
+            tenant.management_api_key = await self._ensure_management_api_key(tenant.id)
         return tenant
 
     async def create_tenant(
@@ -197,6 +231,25 @@ class TenantRepository:
         await self.session.flush()
         return key
 
+    async def _ensure_management_api_key(self, tenant_id: int) -> str:
+        """Generate a management API key if missing and return it."""
+        tenant = await self.get_by_id(tenant_id)
+        if tenant.management_api_key:
+            return tenant.management_api_key
+        while True:
+            key = secrets.token_urlsafe(32)
+            existing = await self.get_by_api_key_any(key)
+            if not existing:
+                break
+        await self.session.execute(
+            update(Tenant).where(Tenant.id == tenant_id).values(management_api_key=key)
+        )
+        await self.session.flush()
+        return key
+
+    async def ensure_management_api_key(self, tenant_id: int) -> str:
+        return await self._ensure_management_api_key(tenant_id)
+
     async def activate_trial(self, tenant_id: int, days: int = 14) -> str:
         """Activates a trial period and returns API key."""
         tenant = await self.get_by_id(tenant_id)
@@ -226,7 +279,9 @@ class TenantRepository:
             sla_new_hours=limits["sla_new_hours"],
             sla_in_progress_days=limits["sla_in_progress_days"],
         )
-        return await self._ensure_api_key(tenant_id)
+        api_key = await self._ensure_api_key(tenant_id)
+        await self._ensure_management_api_key(tenant_id)
+        return api_key
 
     async def has_owner_used_trial(self, owner_tg_id: int) -> bool:
         manager_used = await self.session.scalar(
@@ -264,6 +319,7 @@ class TenantRepository:
             )
         )
         api_key = await self._ensure_api_key(tenant_id)
+        await self._ensure_management_api_key(tenant_id)
 
         from app.core.plans import get_plan_limits
         limits = get_plan_limits("base")
