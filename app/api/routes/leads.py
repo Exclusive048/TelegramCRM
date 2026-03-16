@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
@@ -30,6 +31,17 @@ from app.services.lead_service import LeadService
 
 router = APIRouter(prefix="/leads", tags=["Leads"])
 MAX_EXTRA_KEYS = 20
+MAX_LOGGED_PAYLOAD_KEYS = 25
+_SENSITIVE_LOG_FIELDS = {
+    "name",
+    "phone",
+    "email",
+    "comment",
+    "notes",
+    "note",
+    "service",
+    "extra",
+}
 
 # РџРѕР»СЏ РєРѕС‚РѕСЂС‹Рµ РёСЃРєР»СЋС‡Р°РµРј РёР· extra (С‚РµС…РЅРёС‡РµСЃРєРёРµ / РјСѓСЃРѕСЂ)
 _SKIP_EXTRA = {
@@ -44,6 +56,35 @@ _SKIP_EXTRA = {
     "COOKIES", "$$_headers",
     "assent",
 }
+
+
+def _request_id(request: Request) -> str:
+    request_id = getattr(request.state, "request_id", None) or request.headers.get("X-Request-ID")
+    return str(request_id or "n/a")
+
+
+def _payload_shape(payload: dict[str, Any]) -> dict[str, Any]:
+    keys = sorted({str(key).strip()[:64] for key in payload if str(key).strip()})
+    normalized_lower = {key.lower() for key in keys}
+    sensitive_keys = sorted(normalized_lower.intersection(_SENSITIVE_LOG_FIELDS))
+    return {
+        "payload_key_count": len(keys),
+        "payload_keys": keys[:MAX_LOGGED_PAYLOAD_KEYS],
+        "payload_keys_truncated": len(keys) > MAX_LOGGED_PAYLOAD_KEYS,
+        "contains_sensitive_keys": sensitive_keys,
+    }
+
+
+def _safe_lead_flags(payload: dict[str, Any]) -> dict[str, Any]:
+    extra = payload.get("extra")
+    return {
+        "has_name": bool(payload.get("name")),
+        "has_phone": bool(payload.get("phone")),
+        "has_email": bool(payload.get("email")),
+        "has_comment": bool(payload.get("comment")),
+        "has_service": bool(payload.get("service")),
+        "extra_key_count": len(extra) if isinstance(extra, dict) else 0,
+    }
 
 
 def _pick(data: dict, *keys: str, default: str = "") -> str:
@@ -157,7 +198,15 @@ def _quota_limit_error(limit: int) -> HTTPException:
     )
 
 
-async def _create_lead_atomic(*, tenant, sender, payload: dict):
+async def _create_lead_atomic(
+    *,
+    tenant,
+    sender,
+    payload: dict,
+    request_id: str,
+    endpoint: str,
+    source: str,
+):
     tenant_id = tenant.id if tenant else None
     group_id = tenant.group_id if tenant else 0
 
@@ -174,8 +223,27 @@ async def _create_lead_atomic(*, tenant, sender, payload: dict):
             lead = await service.create_lead(payload)
             await session.commit()
             return lead
+        except HTTPException as exc:
+            await session.rollback()
+            if exc.status_code == 429:
+                logger.warning(
+                    "ingest_quota_denied request_id={} tenant_id={} endpoint={} source={} status_code={}",
+                    request_id,
+                    tenant_id,
+                    endpoint,
+                    source,
+                    exc.status_code,
+                )
+            raise
         except Exception:
             await session.rollback()
+            logger.exception(
+                "ingest_create_failed request_id={} tenant_id={} endpoint={} source={} reason=unexpected_exception",
+                request_id,
+                tenant_id,
+                endpoint,
+                source,
+            )
             raise
 # в”Ђв”Ђ POST /leads в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
@@ -188,7 +256,29 @@ async def create_lead(
     sender=Depends(get_current_sender),
 ):
     tenant = request.state.tenant
+    request_id = _request_id(request)
+    tenant_id = tenant.id if tenant else None
+    payload = body.model_dump(exclude_none=True)
+    source = str(payload.get("source") or "api")
+    payload_shape = _payload_shape(payload)
+    logger.info(
+        "ingest_request_received request_id={} tenant_id={} endpoint={} source={} payload_key_count={} payload_keys={} payload_keys_truncated={}",
+        request_id,
+        tenant_id,
+        "/api/v1/leads",
+        source,
+        payload_shape["payload_key_count"],
+        payload_shape["payload_keys"],
+        payload_shape["payload_keys_truncated"],
+    )
     if tenant and not tenant.group_id:
+        logger.warning(
+            "ingest_rejected request_id={} tenant_id={} endpoint={} source={} reason=group_not_configured",
+            request_id,
+            tenant_id,
+            "/api/v1/leads",
+            source,
+        )
         return JSONResponse(
             status_code=409,
             content={"error": "group_not_configured"},
@@ -196,7 +286,18 @@ async def create_lead(
     lead = await _create_lead_atomic(
         tenant=tenant,
         sender=sender,
-        payload=body.model_dump(exclude_none=True),
+        payload=payload,
+        request_id=request_id,
+        endpoint="/api/v1/leads",
+        source=source,
+    )
+    logger.info(
+        "ingest_create_success request_id={} tenant_id={} endpoint={} source={} lead_id={}",
+        request_id,
+        tenant_id,
+        "/api/v1/leads",
+        source,
+        lead.id,
     )
     return CreateLeadResponse(lead_id=lead.id, tg_message_id=lead.tg_message_id)
 
@@ -210,31 +311,79 @@ async def tilda_webhook(
     sender=Depends(get_current_sender),
 ):
     """
-    Webhook для Tilda.
-    Принимает form-data или JSON, парсит гибко под любую форму.
+    Tilda webhook endpoint.
+    Accepts form-data or JSON and normalizes it into lead payload.
     """
     content_type = request.headers.get("content-type", "")
+    request_id = _request_id(request)
+    tenant = request.state.tenant
+    tenant_id = tenant.id if tenant else None
+    endpoint = "/api/v1/leads/tilda"
+    source = "tilda"
 
     if "application/json" in content_type:
         try:
             data = await request.json()
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "ingest_payload_parse_error request_id={} tenant_id={} endpoint={} source={} content_type={} error_type={}",
+                request_id,
+                tenant_id,
+                endpoint,
+                source,
+                content_type,
+                type(exc).__name__,
+            )
             data = {}
     else:
-        # form-data (стандартный формат Tilda)
+        # form-data (standard Tilda format)
         form = await request.form()
         data = dict(form)
 
-    logger.debug(f"tilda_webhook raw fields: {list(data.keys())}")
+    payload_shape = _payload_shape(data)
+    logger.info(
+        "ingest_request_received request_id={} tenant_id={} endpoint={} source={} payload_key_count={} payload_keys={} payload_keys_truncated={}",
+        request_id,
+        tenant_id,
+        endpoint,
+        source,
+        payload_shape["payload_key_count"],
+        payload_shape["payload_keys"],
+        payload_shape["payload_keys_truncated"],
+    )
 
     lead_data = _parse_tilda(data)
-    logger.info(f"tilda_webhook parsed: name={lead_data['name']!r} phone={lead_data['phone']!r} service={lead_data['service']!r}")
+    lead_flags = _safe_lead_flags(lead_data)
+    logger.info(
+        "tilda_payload_parsed request_id={} tenant_id={} endpoint={} source={} has_name={} has_phone={} has_email={} has_comment={} has_service={} extra_key_count={} contains_sensitive_keys={}",
+        request_id,
+        tenant_id,
+        endpoint,
+        source,
+        lead_flags["has_name"],
+        lead_flags["has_phone"],
+        lead_flags["has_email"],
+        lead_flags["has_comment"],
+        lead_flags["has_service"],
+        lead_flags["extra_key_count"],
+        payload_shape["contains_sensitive_keys"],
+    )
 
-    tenant = request.state.tenant
-    await _create_lead_atomic(
+    lead = await _create_lead_atomic(
         tenant=tenant,
         sender=sender,
         payload={k: v for k, v in lead_data.items() if v is not None},
+        request_id=request_id,
+        endpoint=endpoint,
+        source=source,
+    )
+    logger.info(
+        "ingest_create_success request_id={} tenant_id={} endpoint={} source={} lead_id={}",
+        request_id,
+        tenant_id,
+        endpoint,
+        source,
+        lead.id,
     )
     return OkResponse()
 

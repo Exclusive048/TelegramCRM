@@ -2,10 +2,34 @@ from datetime import datetime, timezone
 from typing import Literal
 
 from fastapi import Header, HTTPException, Request
+from loguru import logger
 
 from app.db.database import AsyncSessionLocal
 from app.db.models.tenant import Tenant
 from app.db.repositories.tenant_repository import TenantRepository
+
+
+def _request_id(request: Request) -> str:
+    request_id = getattr(request.state, "request_id", None) or request.headers.get("X-Request-ID")
+    return str(request_id or "n/a")
+
+
+def _log_auth_denied(
+    request: Request,
+    *,
+    scope: Literal["ingest", "management"],
+    reason: str,
+    tenant_id: int | None = None,
+) -> None:
+    logger.warning(
+        "api_auth_denied request_id={} method={} path={} scope={} reason={} tenant_id={}",
+        _request_id(request),
+        request.method,
+        request.url.path,
+        scope,
+        reason,
+        tenant_id,
+    )
 
 
 def _assert_subscription_active(tenant: Tenant) -> None:
@@ -38,15 +62,34 @@ async def verify_ingest_api_key(request: Request, x_api_key: str = Header(...)) 
         tenant = await repo.get_by_api_key(x_api_key)
 
     if not tenant:
+        _log_auth_denied(request, scope="ingest", reason="invalid_api_key")
         raise HTTPException(status_code=401, detail="Invalid ingest API key")
 
-    _assert_subscription_active(tenant)
+    try:
+        _assert_subscription_active(tenant)
+    except HTTPException:
+        _log_auth_denied(
+            request,
+            scope="ingest",
+            reason="subscription_expired",
+            tenant_id=tenant.id,
+        )
+        raise
     _set_tenant_state(request, tenant, "ingest")
 
 
 async def verify_ingest_server_api_key(request: Request, x_api_key: str = Header(...)) -> None:
     await verify_ingest_api_key(request=request, x_api_key=x_api_key)
-    _assert_not_browser_request(request)
+    try:
+        _assert_not_browser_request(request)
+    except HTTPException:
+        _log_auth_denied(
+            request,
+            scope="ingest",
+            reason="browser_origin_not_allowed",
+            tenant_id=getattr(request.state, "tenant_id", None),
+        )
+        raise
 
 
 async def verify_management_api_key(
@@ -61,9 +104,19 @@ async def verify_management_api_key(
         tenant = await repo.get_by_management_api_key(x_management_api_key)
 
     if not tenant:
+        _log_auth_denied(request, scope="management", reason="invalid_management_api_key")
         raise HTTPException(status_code=401, detail="Invalid management API key")
 
-    _assert_subscription_active(tenant)
+    try:
+        _assert_subscription_active(tenant)
+    except HTTPException:
+        _log_auth_denied(
+            request,
+            scope="management",
+            reason="subscription_expired",
+            tenant_id=tenant.id,
+        )
+        raise
     _set_tenant_state(request, tenant, "management")
 
 
