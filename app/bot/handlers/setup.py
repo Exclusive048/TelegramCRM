@@ -17,6 +17,7 @@ from app.core.config import settings
 from app.core.permissions import is_tg_admin
 from app.db.database import AsyncSessionLocal
 from app.db.models.lead import LeadStatus, ManagerRole
+from app.db.models.tenant import Tenant
 from app.db.repositories.lead_repository import LeadRepository
 from app.db.repositories.tenant_topics import TenantTopicRepository
 from app.services.yukassa_service import _create_yukassa_payment
@@ -52,6 +53,23 @@ async def _probe_topic_thread(sender: TelegramSafeSender, chat_id: int, thread_i
     except Exception as exc:
         logger.warning(f"Could not delete probe message in thread {thread_id}: {exc}")
     return True
+
+
+def _select_setup_tenant(tenants: list[Tenant], chat_id: int) -> tuple[Tenant | None, str | None]:
+    """Select tenant for /setup in a deterministic and safe way."""
+    bound_to_chat = [tenant for tenant in tenants if tenant.group_id == chat_id]
+    if len(bound_to_chat) == 1:
+        return bound_to_chat[0], None
+    if len(bound_to_chat) > 1:
+        return None, "conflict_same_group"
+
+    unbound = [tenant for tenant in tenants if tenant.group_id == 0]
+    if len(unbound) == 1:
+        return unbound[0], None
+    if len(unbound) > 1:
+        return None, "ambiguous_unbound"
+
+    return None, "not_found"
 
 
 async def _ensure_owner_registered(
@@ -249,48 +267,8 @@ async def cmd_setup(message: Message, sender: TelegramSafeSender):
     if message.from_user is None:
         return
 
-    target_tenant = None
-
-    # Ищем тенант, привязанный к этому владельцу.
-    async with AsyncSessionLocal() as session:
-        from app.db.repositories.tenant_repository import TenantRepository
-        from master_bot.notify import notify_admin
-
-        repo = TenantRepository(session)
-
-        # Получаем все тенанты по owner_tg_id
-        tenants = await repo.get_by_owner(message.from_user.id)
-
-        # Берём первый подходящий: либо ещё не привязан к группе (group_id == 0),
-        # либо уже привязан к текущей группе (group_id == chat_id).
-        for t in tenants:
-            if t.group_id == 0 or t.group_id == chat_id:
-                target_tenant = t
-                break
-
-        if not target_tenant:
-            # Пользователь пытается настроить CRM из группы, но регистрация была в мастер-боте.
-            # Показываем куда идти.
-            await sender.send_ephemeral_text(
-                chat_id=chat_id,
-                message_thread_id=message.message_thread_id,
-                text=(
-                    "❌ Вы ещё не зарегистрировали CRM через мастер-бот.\n"
-                    f"Перейдите в мастер-бот: @{settings.crm_bot_username.replace('crm_bot', 'crm_master_bot')}"
-                ),
-                ttl_sec=60,
-            )
-            return
-
-        # Если тенант ещё не привязан к группе — привязываем.
-        if target_tenant.group_id == 0:
-            await repo.bind_group(target_tenant.id, chat_id)
-            await session.commit()
-            await notify_admin(
-                "✅ Группа привязана к CRM\n"
-                f"🏢 {target_tenant.company_name}\n"
-                f"🆔 group_id: {chat_id}"
-            )
+    target_tenant: Tenant | None = None
+    should_bind_tenant = False
 
     if not await is_tg_admin(sender, chat_id, message.from_user.id):
         await sender.send_ephemeral_text(
@@ -311,13 +289,58 @@ async def cmd_setup(message: Message, sender: TelegramSafeSender):
         )
         return
 
+    async with AsyncSessionLocal() as session:
+        from app.db.repositories.tenant_repository import TenantRepository
+
+        repo = TenantRepository(session)
+        tenants = await repo.get_by_owner(message.from_user.id)
+        target_tenant, selection_error = _select_setup_tenant(tenants, chat_id)
+
+    if selection_error == "ambiguous_unbound":
+        await sender.send_ephemeral_text(
+            chat_id=chat_id,
+            message_thread_id=message.message_thread_id,
+            text=(
+                "⚠️ Для вашего Telegram ID найдено несколько незавершённых CRM-аккаунтов. "
+                "Автопривязка отключена: завершите setup через мастер-бота или обратитесь в поддержку."
+            ),
+            ttl_sec=TTL_ERROR_SEC,
+        )
+        return
+
+    if selection_error == "conflict_same_group":
+        await sender.send_ephemeral_text(
+            chat_id=chat_id,
+            message_thread_id=message.message_thread_id,
+            text=(
+                "⛔️ Для этой группы найдено несколько tenant. "
+                "Setup остановлен до разрешения конфликта в данных."
+            ),
+            ttl_sec=TTL_ERROR_SEC,
+        )
+        return
+
+    if not target_tenant:
+        await sender.send_ephemeral_text(
+            chat_id=chat_id,
+            message_thread_id=message.message_thread_id,
+            text=(
+                "❌ Вы ещё не зарегистрировали CRM через мастер-бота.\n"
+                f"Перейдите в мастер-бот: @{settings.crm_bot_username.replace('crm_bot', 'crm_master_bot')}"
+            ),
+            ttl_sec=60,
+        )
+        return
+
+    should_bind_tenant = target_tenant.group_id == 0
+
     member = await sender.get_chat_member(chat_id, message.from_user.id)
     if isinstance(member, ChatMemberOwner):
         await _ensure_owner_registered(
             message.from_user.id,
             message.from_user.full_name,
             message.from_user.username,
-            tenant_id=target_tenant.id if target_tenant else None,
+            tenant_id=target_tenant.id,
         )
 
     progress = await sender.send_ephemeral_text(
@@ -395,6 +418,10 @@ async def cmd_setup(message: Message, sender: TelegramSafeSender):
         summary_lines.append("Ошибки:")
         for name, err in errors:
             summary_lines.append(f"- {name}: {err}")
+    if errors and should_bind_tenant:
+        summary_lines.append(
+            "⚠️ Привязка tenant к группе не выполнена из-за ошибок setup. Исправьте ошибки и повторите /setup."
+        )
     summary_lines.append("Готово.")
 
     await sender.edit_text(
@@ -425,14 +452,27 @@ async def cmd_setup(message: Message, sender: TelegramSafeSender):
     except Exception as exc:
         logger.error(f"Failed to ensure topic menus: {exc}")
 
-    if not errors and target_tenant:
+    if not errors:
         async with AsyncSessionLocal() as session:
             from app.db.repositories.tenant_repository import TenantRepository
 
             repo = TenantRepository(session)
+            if should_bind_tenant:
+                await repo.bind_group(target_tenant.id, chat_id)
             await repo.complete_onboarding(target_tenant.id)
             await session.commit()
 
+        if should_bind_tenant:
+            from master_bot.notify import notify_admin
+
+            try:
+                await notify_admin(
+                    "✅ Группа привязана к CRM\n"
+                    f"🏢 {target_tenant.company_name}\n"
+                    f"🆔 group_id: {chat_id}"
+                )
+            except Exception as exc:
+                logger.warning(f"Failed to notify admin after group bind: {exc}")
 
 @router.message(Command("add_manager"))
 async def cmd_add_manager(message: Message, sender: TelegramSafeSender, tenant=None):
