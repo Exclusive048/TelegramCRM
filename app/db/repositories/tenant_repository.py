@@ -237,9 +237,13 @@ class TenantRepository:
         return deleted_id is not None
 
     async def get_tenant_ids_without_management_api_key(self, *, limit: int | None = None) -> list[int]:
+        missing_management_key = or_(
+            Tenant.management_api_key.is_(None),
+            Tenant.management_api_key == "",
+        )
         stmt = (
             select(Tenant.id)
-            .where(Tenant.management_api_key.is_(None))
+            .where(missing_management_key)
             .order_by(Tenant.id.asc())
         )
         if limit is not None:
@@ -248,10 +252,14 @@ class TenantRepository:
         return list(result.scalars().all())
 
     async def count_without_management_api_key(self) -> int:
+        missing_management_key = or_(
+            Tenant.management_api_key.is_(None),
+            Tenant.management_api_key == "",
+        )
         result = await self.session.execute(
             select(func.count())
             .select_from(Tenant)
-            .where(Tenant.management_api_key.is_(None))
+            .where(missing_management_key)
         )
         return int(result.scalar_one())
 

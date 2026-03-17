@@ -23,8 +23,8 @@ class Tenant(Base):
     api_key: Mapped[str | None] = mapped_column(
         String(64), unique=True, nullable=True, index=True
     )
-    management_api_key: Mapped[str | None] = mapped_column(
-        String(64), unique=True, nullable=True, index=True
+    management_api_key: Mapped[str] = mapped_column(
+        String(64), unique=True, nullable=False, index=True
     )
     referral_code: Mapped[str | None] = mapped_column(
         String(16), unique=True, nullable=True, index=True
