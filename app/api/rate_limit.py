@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import Request
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -13,4 +15,9 @@ def ip_and_api_key(request: Request) -> str:
     return ip
 
 
-limiter = Limiter(key_func=ip_and_api_key)
+_SLOWAPI_CONFIG_FILE = Path(__file__).with_name("slowapi.env")
+
+limiter = Limiter(
+    key_func=ip_and_api_key,
+    config_filename=str(_SLOWAPI_CONFIG_FILE),
+)
