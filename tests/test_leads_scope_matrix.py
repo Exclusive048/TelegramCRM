@@ -32,6 +32,8 @@ def test_leads_routes_use_expected_scope_dependencies() -> None:
 
     update_block = _function_block(source, "update_lead")
     assert "Depends(verify_management_api_key)" in update_block
+    assert "if body.status:" not in update_block
+    assert 'return JSONResponse(status_code=409, content={"error": "invalid_transition"})' in update_block
 
     comment_block = _function_block(source, "add_comment")
     assert "Depends(verify_management_api_key)" in comment_block

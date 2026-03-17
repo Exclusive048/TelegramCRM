@@ -461,21 +461,22 @@ async def update_lead(
     lead = await repo.get_by_id(lead_id, tenant_id=tenant_id)
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
-    if body.status:
-        group_id = tenant.group_id if tenant else 0
-        service = LeadService(repo, sender, group_id=group_id, tenant_id=tenant_id)
-        manager_tg_id = body.manager_tg_id
-        result = None
-        if body.status == LeadStatus.IN_PROGRESS:
-            result = await service.take_in_progress(lead_id, manager_tg_id, None)
-        elif body.status == LeadStatus.PAID:
-            result = await service.mark_paid(lead_id, manager_tg_id, body.amount, None)
-        elif body.status == LeadStatus.SUCCESS:
-            result = await service.mark_success(lead_id, manager_tg_id, None)
-        elif body.status == LeadStatus.REJECTED:
-            result = await service.reject_lead(lead_id, manager_tg_id, body.reject_reason or "", None)
-        if not result:
-            return JSONResponse(status_code=409, content={"error": "invalid_transition"})
+
+    group_id = tenant.group_id if tenant else 0
+    service = LeadService(repo, sender, group_id=group_id, tenant_id=tenant_id)
+    manager_tg_id = body.manager_tg_id
+    result = None
+    if body.status == LeadStatus.IN_PROGRESS:
+        result = await service.take_in_progress(lead_id, manager_tg_id, None)
+    elif body.status == LeadStatus.PAID:
+        result = await service.mark_paid(lead_id, manager_tg_id, body.amount, None)
+    elif body.status == LeadStatus.SUCCESS:
+        result = await service.mark_success(lead_id, manager_tg_id, None)
+    elif body.status == LeadStatus.REJECTED:
+        result = await service.reject_lead(lead_id, manager_tg_id, body.reject_reason or "", None)
+    if not result:
+        return JSONResponse(status_code=409, content={"error": "invalid_transition"})
+
     return OkResponse()
 
 # в”Ђв”Ђ POST /leads/{id}/comment в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ

@@ -26,14 +26,12 @@ class TildaWebhookRequest(BaseModel):
 
 
 class LeadUpdateRequest(BaseModel):
-    status:        LeadStatus | None = None
-    manager_id:    int | None        = None
-    manager_tg_id: int | None        = None  # FIXED #7
-    reject_reason: str | None        = None
-    service:       str | None        = None
-    email:         str | None        = None
-    amount:        float | None      = None
-    extra:         dict[str, Any] | None = None
+    model_config = {"extra": "forbid"}
+
+    status:        LeadStatus = Field(..., description="Target status for transition")
+    manager_tg_id: int | None = None  # FIXED #7
+    reject_reason: str | None = None
+    amount:        float | None = None
 
 
 class LeadCommentRequest(BaseModel):
