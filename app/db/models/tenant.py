@@ -2,6 +2,7 @@ from datetime import datetime
 
 from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, Numeric, String
 from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.sql import func
 
 from app.db.models.lead import Base
 
@@ -82,3 +83,18 @@ class Payment(Base):
     status: Mapped[str] = mapped_column(String(50), default="pending", nullable=False)
     # status: pending | succeeded | cancelled
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default="now()")
+
+
+class AdminPendingMessage(Base):
+    __tablename__ = "admin_pending_messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    admin_tg_id: Mapped[int] = mapped_column(BigInteger, nullable=False, unique=True, index=True)
+    tenant_id: Mapped[int] = mapped_column(Integer, ForeignKey("tenants.id"), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )

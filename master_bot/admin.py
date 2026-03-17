@@ -18,15 +18,40 @@ from master_bot.notify import notify_tenant_owner
 router = Router()
 
 PAGE_SIZE = 8
-
-# Хранилище ожидающих отправки сообщения (in-memory)
-_pending_msg: dict[int, int] = {}  # admin_tg_id → tenant_id
+ADMIN_PENDING_TTL_HOURS = 24
 
 
 # ── Проверка что это админ ─────────────────────────────────────────────────────
 
 def is_admin(user_id: int) -> bool:
     return user_id == settings.master_admin_tg_id
+
+
+async def _set_admin_pending_message(admin_tg_id: int, tenant_id: int) -> None:
+    expires_at = datetime.now(timezone.utc) + timedelta(hours=ADMIN_PENDING_TTL_HOURS)
+    async with AsyncSessionLocal() as session:
+        repo = TenantRepository(session)
+        await repo.set_admin_pending_message(
+            admin_tg_id=admin_tg_id,
+            tenant_id=tenant_id,
+            expires_at=expires_at,
+        )
+        await session.commit()
+
+
+async def _get_admin_pending_tenant_id(admin_tg_id: int) -> int | None:
+    async with AsyncSessionLocal() as session:
+        repo = TenantRepository(session)
+        tenant_id = await repo.get_admin_pending_tenant_id(admin_tg_id)
+        await session.commit()
+        return tenant_id
+
+
+async def _clear_admin_pending_message(admin_tg_id: int) -> None:
+    async with AsyncSessionLocal() as session:
+        repo = TenantRepository(session)
+        await repo.clear_admin_pending_message(admin_tg_id)
+        await session.commit()
 
 
 # ── Вспомогательные функции ────────────────────────────────────────────────────
@@ -102,6 +127,7 @@ async def cmd_clients(message: Message):
     if not is_admin(message.from_user.id):
         await message.answer("⛔️ Нет доступа.")
         return
+    await _clear_admin_pending_message(message.from_user.id)
     await _show_clients_page(message, page=0, edit=False)
 
 
@@ -116,6 +142,7 @@ async def cb_clients_page(callback: CallbackQuery):
         return
     _, _, page = parsed
     await callback.answer()
+    await _clear_admin_pending_message(callback.from_user.id)
     await _show_clients_page(callback.message, page=page, edit=True)
 
 
@@ -176,6 +203,7 @@ async def cmd_stats(message: Message):
     if not is_admin(message.from_user.id):
         await message.answer("⛔️ Нет доступа.")
         return
+    await _clear_admin_pending_message(message.from_user.id)
     await _show_stats(message, edit=False)
 
 
@@ -185,6 +213,7 @@ async def cb_stats(callback: CallbackQuery):
         await callback.answer("⛔️ Нет доступа.", show_alert=True)
         return
     await callback.answer()
+    await _clear_admin_pending_message(callback.from_user.id)
     await _show_stats(callback.message, edit=True)
 
 
@@ -264,6 +293,7 @@ async def cb_adm_detail(callback: CallbackQuery):
         await callback.answer("⚠️ Некорректный callback.", show_alert=True)
         return
     _, _, tenant_id = parsed
+    await _clear_admin_pending_message(callback.from_user.id)
     async with AsyncSessionLocal() as session:
         repo = TenantRepository(session)
         tenant = await repo.get_by_id(tenant_id)
@@ -419,7 +449,7 @@ async def cb_adm_msg(callback: CallbackQuery):
         await callback.answer("⚠️ Некорректный callback.", show_alert=True)
         return
     _, _, tenant_id = parsed
-    _pending_msg[callback.from_user.id] = tenant_id
+    await _set_admin_pending_message(callback.from_user.id, tenant_id)
     await callback.answer()
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(
@@ -436,23 +466,29 @@ async def handle_admin_freetext(message: Message):
     """Перехватывает текст от админа когда он в режиме отправки сообщения клиенту."""
     if not is_admin(message.from_user.id):
         return
-    if message.from_user.id not in _pending_msg:
+    tenant_id = await _get_admin_pending_tenant_id(message.from_user.id)
+    if tenant_id is None:
         return
-
-    tenant_id = _pending_msg.pop(message.from_user.id)
 
     async with AsyncSessionLocal() as session:
         repo = TenantRepository(session)
         tenant = await repo.get_by_id(tenant_id)
 
     if not tenant:
+        await _clear_admin_pending_message(message.from_user.id)
         await message.answer("⛔️ Аккаунт не найден.")
         return
 
-    await notify_tenant_owner(
-        tenant.owner_tg_id,
-        f"✉️ <b>Сообщение от администратора:</b>\n\n{message.text}",
-    )
+    try:
+        await notify_tenant_owner(
+            tenant.owner_tg_id,
+            f"✉️ <b>Сообщение от администратора:</b>\n\n{message.text}",
+        )
+    except Exception:
+        await message.answer("⚠️ Не удалось отправить сообщение. Попробуйте ещё раз.")
+        return
+
+    await _clear_admin_pending_message(message.from_user.id)
     await message.answer(
         f"✅ Сообщение отправлено клиенту <b>{tenant.company_name}</b>.",
         parse_mode="HTML",

@@ -2,12 +2,12 @@ from datetime import datetime, timedelta, timezone
 import secrets
 import string
 
-from sqlalchemy import case, exists, func, or_, select, update
+from sqlalchemy import case, delete, exists, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.db.models.lead import Manager
-from app.db.models.tenant import Tenant, Payment
+from app.db.models.tenant import AdminPendingMessage, Payment, Tenant
 from app.db.utils import _naive
 
 
@@ -182,6 +182,59 @@ class TenantRepository:
             select(Tenant).where(Tenant.id == tenant_id)
         )
         return result.scalar_one_or_none()
+
+    async def set_admin_pending_message(
+        self,
+        admin_tg_id: int,
+        tenant_id: int,
+        *,
+        expires_at: datetime,
+    ) -> None:
+        expires_at_naive = _naive(expires_at)
+        existing_result = await self.session.execute(
+            select(AdminPendingMessage).where(AdminPendingMessage.admin_tg_id == admin_tg_id)
+        )
+        existing = existing_result.scalar_one_or_none()
+        if existing:
+            existing.tenant_id = tenant_id
+            existing.expires_at = expires_at_naive
+            await self.session.flush()
+            return
+
+        pending = AdminPendingMessage(
+            admin_tg_id=admin_tg_id,
+            tenant_id=tenant_id,
+            expires_at=expires_at_naive,
+        )
+        self.session.add(pending)
+        await self.session.flush()
+
+    async def get_admin_pending_tenant_id(self, admin_tg_id: int) -> int | None:
+        result = await self.session.execute(
+            select(AdminPendingMessage).where(AdminPendingMessage.admin_tg_id == admin_tg_id)
+        )
+        pending = result.scalar_one_or_none()
+        if not pending:
+            return None
+
+        now = _naive(datetime.now(timezone.utc))
+        if pending.expires_at < now:
+            await self.session.execute(
+                delete(AdminPendingMessage).where(AdminPendingMessage.id == pending.id)
+            )
+            await self.session.flush()
+            return None
+        return int(pending.tenant_id)
+
+    async def clear_admin_pending_message(self, admin_tg_id: int) -> bool:
+        deleted_id = (
+            await self.session.execute(
+                delete(AdminPendingMessage)
+                .where(AdminPendingMessage.admin_tg_id == admin_tg_id)
+                .returning(AdminPendingMessage.id)
+            )
+        ).scalar_one_or_none()
+        return deleted_id is not None
 
     async def get_tenant_ids_without_management_api_key(self, *, limit: int | None = None) -> list[int]:
         stmt = (
