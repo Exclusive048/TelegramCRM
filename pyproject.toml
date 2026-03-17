@@ -11,8 +11,14 @@ extend-exclude = [
 ]
 
 [tool.ruff.lint]
-select = ["F"]
-ignore = ["F401"]
+select = ["E9", "F", "B"]
+ignore = [
+  # FastAPI uses Depends()/Query() in defaults by design; B008 is noisy here.
+  "B008",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"alembic/versions/*.py" = ["F401"]
 
 [tool.mypy]
 python_version = "3.10"
@@ -23,3 +29,11 @@ no_implicit_optional = true
 show_error_codes = true
 pretty = true
 ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = [
+  "app.api.schemas.*",
+  "app.api.deps",
+  "app.api.routes.leads",
+]
+ignore_errors = false

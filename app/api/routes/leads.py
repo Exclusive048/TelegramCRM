@@ -164,7 +164,7 @@ def _parse_tilda(data: dict) -> dict:
     utm_source = _pick(data, "utm_source", "utm_medium") or None
 
     # в”Ђв”Ђ Extra вЂ” РІСЃС‘ РѕСЃС‚Р°Р»СЊРЅРѕРµ РїРѕР»РµР·РЅРѕРµ в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
-    extra = {}
+    extra: dict[str, str] = {}
     for k, v in list(data.items()):
         if k in _SKIP_EXTRA:
             continue
@@ -464,7 +464,7 @@ async def update_lead(
 
     group_id = tenant.group_id if tenant else 0
     service = LeadService(repo, sender, group_id=group_id, tenant_id=tenant_id)
-    manager_tg_id = body.manager_tg_id
+    manager_tg_id = body.manager_tg_id or 0
     result = None
     if body.status == LeadStatus.IN_PROGRESS:
         result = await service.take_in_progress(lead_id, manager_tg_id, None)

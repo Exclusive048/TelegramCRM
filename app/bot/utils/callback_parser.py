@@ -18,7 +18,7 @@ def safe_parse(
         return None
 
     parsed: list[object] = []
-    for raw, expected_type in zip(parts, expected_types):
+    for raw, expected_type in zip(parts, expected_types, strict=True):
         if expected_type is str:
             parsed.append(raw)
             continue
