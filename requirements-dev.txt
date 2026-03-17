@@ -1,14 +1,8 @@
-# Lint / format
-ruff>=0.5.0
+# Development/test dependencies.
+# Includes runtime baseline for one-command local setup.
+-r requirements.txt
 
-# Type check
-mypy>=1.8.0
-
-# Tests (optional)
-pytest>=8.0.0
-
-# Protobuf codegen tooling lives in requirements-codegen.txt
-# (kept separate from runtime deps to avoid protobuf resolver conflicts).
-
-# Git hooks (optional)
-pre-commit>=3.6.0
+mypy==1.19.1
+pre-commit==4.5.1
+pytest==9.0.2
+ruff==0.15.4

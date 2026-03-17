@@ -1,0 +1,2 @@
+# Optional TRON stack (not required by base runtime).
+tronpy==0.2.3

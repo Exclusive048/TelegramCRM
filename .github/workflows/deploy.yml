@@ -26,7 +26,6 @@ jobs:
                   python -m pip install "setuptools<81"
             - name: Install dependencies
               run: |
-                  pip install --prefer-binary -r requirements.txt
                   pip install --prefer-binary -r requirements-dev.txt
 
             - name: Ruff lint

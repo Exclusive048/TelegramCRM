@@ -1,4 +1,3 @@
 # Protobuf/gRPC code generation tooling only.
-# Do not install in deploy/runtime environment together with requirements.txt,
-# because runtime stack is pinned to protobuf 4.x for cosmpy/google compatibility.
+# Keep separate from runtime to avoid protobuf resolver conflicts in deploy installs.
 grpcio-tools==1.71.0

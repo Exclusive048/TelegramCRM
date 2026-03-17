@@ -1,0 +1,2 @@
+# Optional EVM/Web3 stack (not required by base runtime).
+web3==6.4.0
