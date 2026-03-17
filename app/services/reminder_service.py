@@ -15,6 +15,9 @@ from app.db.repositories.lead_repository import LeadRepository
 from app.services.lead_service import LeadService
 from app.telegram.safe_sender import TelegramSafeSender
 
+REMINDER_MAX_DELIVERY_ATTEMPTS = 5
+_RETRY_BACKOFF_SECONDS = (60, 300, 900, 1800)
+
 _scheduler = AsyncIOScheduler(
     timezone="UTC",
     job_defaults={
@@ -78,17 +81,56 @@ def _build_message_link(chat_id: int, message_id: int) -> str:
     return f"https://t.me/c/{chat_part}/{message_id}"
 
 
-async def _reschedule_after_failure(
+def _retry_delay_seconds(attempt_number: int) -> int:
+    if attempt_number <= 0:
+        return _RETRY_BACKOFF_SECONDS[0]
+    idx = min(attempt_number - 1, len(_RETRY_BACKOFF_SECONDS) - 1)
+    return _RETRY_BACKOFF_SECONDS[idx]
+
+
+async def _handle_delivery_failure(
     repo: LeadRepository,
     sender: TelegramSafeSender,
-    reminder_id: int,
+    reminder,
     lead_id: int,
     group_id: int | None,
+    *,
+    reason: str,
+    err: Exception | None = None,
 ) -> None:
-    retry_at = datetime.now(timezone.utc) + timedelta(minutes=1)
-    await repo.release_reminder_after_failure(reminder_id, retry_at=retry_at)
+    attempt = int(getattr(reminder, "retry_count", 0) or 0)
+    error_text = str(err) if err else "-"
+    if attempt >= REMINDER_MAX_DELIVERY_ATTEMPTS:
+        await repo.cancel_reminder(reminder.id)
+        await _refresh_lead_card(repo, sender, lead_id, group_id)
+        _unschedule_job(reminder.id)
+        logger.error(
+            "reminder_delivery_abandoned id={} lead_id={} attempts={} max_attempts={} reason={} err={}",
+            reminder.id,
+            lead_id,
+            attempt,
+            REMINDER_MAX_DELIVERY_ATTEMPTS,
+            reason,
+            error_text,
+        )
+        return
+
+    delay_sec = _retry_delay_seconds(attempt)
+    retry_at = datetime.now(timezone.utc) + timedelta(seconds=delay_sec)
+    await repo.release_reminder_after_failure(reminder.id, retry_at=retry_at)
     await _refresh_lead_card(repo, sender, lead_id, group_id)
-    _schedule_job(reminder_id, retry_at, sender, group_id=group_id)
+    _schedule_job(reminder.id, retry_at, sender, group_id=group_id)
+    logger.warning(
+        "reminder_retry_scheduled id={} lead_id={} attempt={} max_attempts={} delay_sec={} retry_at={} reason={} err={}",
+        reminder.id,
+        lead_id,
+        attempt,
+        REMINDER_MAX_DELIVERY_ATTEMPTS,
+        delay_sec,
+        retry_at.isoformat(),
+        reason,
+        error_text,
+    )
 
 
 async def _send_reminder_job(reminder_id: int, sender: TelegramSafeSender, group_id: int | None):
@@ -108,40 +150,54 @@ async def _send_reminder_job(reminder_id: int, sender: TelegramSafeSender, group
             await session.commit()
             return
 
-        if group_id is None:
-            group_id = await repo.get_group_id_for_lead(lead.id)
-        if not group_id:
-            await _reschedule_after_failure(repo, sender, reminder_id, lead.id, group_id)
-            await session.commit()
-            return
-
-        active = await repo.get_active_card_message(lead.id)
-        link = _build_message_link(active.chat_id, active.message_id) if active else None
-
-        lines = [
-            f"🔔 Напоминание по заявке #{lead.id}",
-            f"👤 {html.escape(lead.name)}",
-            f"📱 {html.escape(lead.phone)}",
-            f"Статус: {_status_label(lead.status)}",
-        ]
-        if reminder.message:
-            lines.append(f"Комментарий: {html.escape(reminder.message)}")
-        if link:
-            lines.append(f"Ссылка: {link}")
-
-        topic_id = await resolve_topic_thread_id(
-            group_id,
-            TopicKey.REMINDERS,
-            session,
-            sender=sender,
-            thread_id=None,
-        )
-        if not topic_id:
-            await _reschedule_after_failure(repo, sender, reminder_id, lead.id, group_id)
-            await session.commit()
-            return
-
         try:
+            if group_id is None:
+                group_id = await repo.get_group_id_for_lead(lead.id)
+            if not group_id:
+                await _handle_delivery_failure(
+                    repo,
+                    sender,
+                    reminder,
+                    lead.id,
+                    group_id,
+                    reason="group_not_configured",
+                )
+                await session.commit()
+                return
+
+            active = await repo.get_active_card_message(lead.id)
+            link = _build_message_link(active.chat_id, active.message_id) if active else None
+
+            lines = [
+                f"🔔 Напоминание по заявке #{lead.id}",
+                f"👤 {html.escape(lead.name)}",
+                f"📱 {html.escape(lead.phone)}",
+                f"Статус: {_status_label(lead.status)}",
+            ]
+            if reminder.message:
+                lines.append(f"Комментарий: {html.escape(reminder.message)}")
+            if link:
+                lines.append(f"Ссылка: {link}")
+
+            topic_id = await resolve_topic_thread_id(
+                group_id,
+                TopicKey.REMINDERS,
+                session,
+                sender=sender,
+                thread_id=None,
+            )
+            if not topic_id:
+                await _handle_delivery_failure(
+                    repo,
+                    sender,
+                    reminder,
+                    lead.id,
+                    group_id,
+                    reason="reminders_topic_missing",
+                )
+                await session.commit()
+                return
+
             await sender.send_message(
                 chat_id=group_id,
                 message_thread_id=topic_id,
@@ -149,14 +205,16 @@ async def _send_reminder_job(reminder_id: int, sender: TelegramSafeSender, group
                 parse_mode="HTML",
             )
         except Exception as exc:
-            await _reschedule_after_failure(repo, sender, reminder_id, lead.id, group_id)
-            await session.commit()
-            logger.warning(
-                "reminder_send_failed id={} lead_id={} err={}",
-                reminder_id,
+            await _handle_delivery_failure(
+                repo,
+                sender,
+                reminder,
                 lead.id,
-                exc,
+                group_id,
+                reason="send_exception",
+                err=exc,
             )
+            await session.commit()
             return
 
         await repo.mark_reminder_sent(reminder_id)
