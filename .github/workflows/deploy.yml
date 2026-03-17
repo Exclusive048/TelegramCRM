@@ -26,8 +26,8 @@ jobs:
                   python -m pip install "setuptools<81"
             - name: Install dependencies
               run: |
-                  pip install -r requirements.txt
-                  pip install -r requirements-dev.txt
+                  pip install --prefer-binary -r requirements.txt
+                  pip install --prefer-binary -r requirements-dev.txt
 
             - name: Ruff lint
               run: ruff check . --output-format=github
