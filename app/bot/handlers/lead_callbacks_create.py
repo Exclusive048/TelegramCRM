@@ -6,6 +6,7 @@ from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+from loguru import logger
 
 from app.bot.constants.ttl import TTL_ERROR_SEC, TTL_MENU_SEC
 from app.bot.utils.force_reply import (
@@ -231,6 +232,21 @@ async def handle_create_confirm(callback: CallbackQuery, state: FSMContext, send
         service = LeadService(repo, sender, group_id=group_id, tenant_id=tenant_id)
         lead = await service.create_lead(payload)
         await session.commit()
+
+    async with AsyncSessionLocal() as post_session:
+        post_repo = LeadRepository(post_session)
+        post_service = LeadService(post_repo, sender, group_id=group_id, tenant_id=tenant_id)
+        try:
+            await post_service.sync_new_lead_card(lead.id)
+            await post_session.commit()
+        except Exception:
+            await post_session.rollback()
+            logger.exception(
+                "lead_create_post_commit_sync_failed lead_id={} tenant_id={} group_id={} source=manual",
+                lead.id,
+                tenant_id,
+                group_id,
+            )
 
     await sender.answer(callback, "✅ Заявка создана.")
     await cleanup_inline_menu(callback, sender, done_text=f"✅ Заявка #{lead.id} создана.")

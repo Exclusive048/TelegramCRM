@@ -278,6 +278,7 @@ async def _create_lead_atomic(
 ):
     tenant_id = tenant.id if tenant else None
     group_id = tenant.group_id if tenant else 0
+    lead = None
 
     async with AsyncSessionLocal() as session:
         try:
@@ -291,7 +292,6 @@ async def _create_lead_atomic(
             service = LeadService(repo, sender, group_id=group_id, tenant_id=tenant_id)
             lead = await service.create_lead(payload)
             await session.commit()
-            return lead
         except HTTPException as exc:
             await session.rollback()
             if exc.status_code == 429:
@@ -314,6 +314,35 @@ async def _create_lead_atomic(
                 source,
             )
             raise
+    if lead is None:
+        raise RuntimeError("Lead was not created")
+
+    # Post-commit side-effect: Telegram card publishing must not run before lead commit.
+    if tenant_id is not None and group_id:
+        async with AsyncSessionLocal() as post_session:
+            post_repo = LeadRepository(post_session)
+            post_service = LeadService(
+                post_repo,
+                sender,
+                group_id=group_id,
+                tenant_id=tenant_id,
+            )
+            try:
+                tg_message_id = await post_service.sync_new_lead_card(lead.id)
+                await post_session.commit()
+                if tg_message_id is not None:
+                    lead.tg_message_id = tg_message_id
+            except Exception:
+                await post_session.rollback()
+                logger.exception(
+                    "ingest_post_commit_sync_failed request_id={} tenant_id={} endpoint={} source={} lead_id={} reason=telegram_side_effect_failed",
+                    request_id,
+                    tenant_id,
+                    endpoint,
+                    source,
+                    lead.id,
+                )
+    return lead
 # в”Ђв”Ђ POST /leads в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 @router.post("", response_model=CreateLeadResponse, status_code=201)

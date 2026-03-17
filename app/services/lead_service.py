@@ -39,6 +39,27 @@ class LeadService:
         payload["tenant_id"] = tenant_id
         lead = await self.repo.create(payload)
         logger.info(f"lead_action=create lead_id={lead.id} source={lead.source}")
+        return lead
+
+    async def sync_new_lead_card(self, lead_id: int) -> int | None:
+        """
+        Post-commit side-effect for new lead: publish Telegram card and persist message refs.
+        Must be called only after successful DB commit of lead creation.
+        """
+        tenant_id = self._tenant_scope(action="sync_new_lead_card")
+        if tenant_id is None:
+            return None
+        lead = await self.repo.get_by_id_scoped(lead_id, tenant_id=tenant_id)
+        if not lead:
+            return None
+
+        existing_active = await self.repo.get_active_card_message(lead.id)
+        if existing_active:
+            logger.info(
+                f"lead_post lead_id={lead.id} action=create_sync skipped=already_active message_id={existing_active.message_id}"
+            )
+            return existing_active.message_id
+
         topic_id = None
         if self.group_id:
             topic_id = await resolve_topic_thread_id(
@@ -57,9 +78,10 @@ class LeadService:
                 message_id=ref.message_id,
             )
             logger.info(f"lead_post lead_id={lead.id} ref={ref} ok=True")
+            return ref.message_id
         else:
             logger.warning(f"lead_post lead_id={lead.id} ok=False")
-        return lead
+            return None
 
     async def take_in_progress(
         self,
