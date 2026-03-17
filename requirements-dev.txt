@@ -7,5 +7,8 @@ mypy>=1.8.0
 # Tests (optional)
 pytest>=8.0.0
 
+# Protobuf codegen tooling lives in requirements-codegen.txt
+# (kept separate from runtime deps to avoid protobuf resolver conflicts).
+
 # Git hooks (optional)
 pre-commit>=3.6.0
