@@ -79,7 +79,7 @@ class TenantMiddleware(BaseMiddleware):
 
             if not tenant.is_active:
                 try:
-                    text = "⛔️ Подписка неактивна. Напишите /pay для оплаты."
+                    text = "⛔️ Подписка неактивна. Администратору группы нужно выполнить /pay."
                     if isinstance(event, Message):
                         await event.answer(text)
                     elif isinstance(event, CallbackQuery):

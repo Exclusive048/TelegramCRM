@@ -30,6 +30,17 @@ class TenantRegistrationState(StatesGroup):
     waiting_for_company_name = State()
 
 
+def _build_payment_markup(payment_url: str):
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(
+            text=f"💳 Оплатить {settings.subscription_price} руб",
+            url=payment_url,
+        )
+    )
+    return builder.as_markup()
+
+
 def _get_topic_spec(key: TopicKey):
     for spec in TOPIC_SPECS:
         if spec.key == key:
@@ -117,7 +128,7 @@ async def cmd_start(message: Message, state: FSMContext, sender: TelegramSafeSen
                 await sender.send_ephemeral_text(
                     chat_id=message.chat.id,
                     message_thread_id=message.message_thread_id,
-                    text="⏰ Подписка истекла. Напишите /pay для продления.",
+                    text="⏰ Подписка истекла. Администратор группы: выполните /pay для продления.",
                     ttl_sec=60,
                 )
             return
@@ -246,18 +257,72 @@ async def cb_reg_pay(callback: CallbackQuery, sender: TelegramSafeSender):
             await callback.message.edit_text("⚠️ Не удалось создать платёж. Обратитесь в поддержку.")
         return
 
-    builder = InlineKeyboardBuilder()
-    builder.row(
-        InlineKeyboardButton(
-            text=f"💳 Оплатить {settings.subscription_price} руб",
-            url=payment_url,
-        )
-    )
     if callback.message:
         await callback.message.edit_text(
             "💳 Для оплаты нажмите кнопку ниже.\nПосле оплаты подписка активируется автоматически.",
-            reply_markup=builder.as_markup(),
+            reply_markup=_build_payment_markup(payment_url),
         )
+
+
+@router.message(Command("pay"))
+async def cmd_pay(message: Message, sender: TelegramSafeSender):
+    if message.chat.type == "private":
+        await message.answer(
+            "ℹ️ Команда /pay работает в группе с подключённой CRM.\n"
+            "Добавьте бота в группу и запустите /pay там."
+        )
+        return
+
+    if message.from_user is None:
+        return
+
+    if not await is_tg_admin(sender, message.chat.id, message.from_user.id):
+        await sender.send_ephemeral_text(
+            chat_id=message.chat.id,
+            message_thread_id=message.message_thread_id,
+            text="⛔️ Только администратор группы может запускать оплату через /pay.",
+            ttl_sec=TTL_ERROR_SEC,
+        )
+        return
+
+    async with AsyncSessionLocal() as session:
+        from app.db.repositories.tenant_repository import TenantRepository
+
+        repo = TenantRepository(session)
+        tenant = await repo.get_by_group_id(message.chat.id)
+
+    if not tenant:
+        await sender.send_ephemeral_text(
+            chat_id=message.chat.id,
+            message_thread_id=message.message_thread_id,
+            text="❌ CRM для этой группы не зарегистрирована. Выполните /start.",
+            ttl_sec=TTL_ERROR_SEC,
+        )
+        return
+
+    payment_url = await _create_yukassa_payment(tenant.id)
+    if not payment_url:
+        await sender.send_ephemeral_text(
+            chat_id=message.chat.id,
+            message_thread_id=message.message_thread_id,
+            text=f"⚠️ Не удалось создать платёж. Обратитесь в поддержку: {settings.support_username}",
+            ttl_sec=60,
+        )
+        return
+
+    action_text = "Продление" if tenant.is_active else "Оплата"
+    await sender.send_message(
+        chat_id=message.chat.id,
+        message_thread_id=message.message_thread_id,
+        text=(
+            f"💳 <b>{action_text} подписки</b>\n\n"
+            f"🏢 {tenant.company_name}\n"
+            f"💰 Сумма: {settings.subscription_price} руб\n\n"
+            "После оплаты подписка активируется автоматически."
+        ),
+        reply_markup=_build_payment_markup(payment_url),
+        parse_mode="HTML",
+    )
 
 
 @router.message(Command("setup"))

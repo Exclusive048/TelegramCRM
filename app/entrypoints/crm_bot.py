@@ -26,6 +26,7 @@ from master_bot.notify import set_master_bot
 async def _set_crm_commands(bot: Bot) -> None:
     group_commands = [
         BotCommand(command="setup", description="Настроить CRM в группе"),
+        BotCommand(command="pay", description="Оплатить или продлить подписку"),
         BotCommand(command="cabinet", description="Открыть кабинет администратора"),
         BotCommand(command="panel", description="Восстановить пульт менеджеров"),
         BotCommand(command="managers", description="Показать команду менеджеров"),
