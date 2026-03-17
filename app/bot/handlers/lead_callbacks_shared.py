@@ -75,6 +75,8 @@ def _parse_custom_datetime(value: str) -> datetime | None:
 
 
 async def _get_manager(repo: LeadRepository, user_id: int, tenant_id: int | None = None):
+    if tenant_id is None:
+        return None
     return await repo.get_manager_by_tg_id(user_id, tenant_id=tenant_id)
 
 

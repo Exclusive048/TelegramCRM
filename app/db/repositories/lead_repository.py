@@ -23,6 +23,14 @@ class LeadRepository:
     def __init__(self, session: AsyncSession):
         self.session = session
 
+    @staticmethod
+    def _require_tenant_scope(tenant_id: int | None, *, operation: str) -> int:
+        if tenant_id is None:
+            raise ValueError(
+                f"{operation} requires tenant_id to avoid cross-tenant fail-open access"
+            )
+        return tenant_id
+
     # ── Создание ──────────────────────────────────────
 
     async def create(self, data: dict) -> Lead:
@@ -46,6 +54,13 @@ class LeadRepository:
             query = query.where(Lead.tenant_id == tenant_id)
         result = await self.session.execute(query)
         return result.scalar_one_or_none()
+
+    async def get_by_id_scoped(self, lead_id: int, tenant_id: int | None) -> Lead | None:
+        scoped_tenant_id = self._require_tenant_scope(
+            tenant_id,
+            operation="get_by_id_scoped",
+        )
+        return await self.get_by_id(lead_id, tenant_id=scoped_tenant_id)
 
     async def get_list(
         self,
@@ -82,6 +97,34 @@ class LeadRepository:
         query = query.order_by(Lead.created_at.desc()).offset((page - 1) * per_page).limit(per_page)
         result = await self.session.execute(query)
         return result.scalars().all(), total
+
+    async def get_list_scoped(
+        self,
+        status: LeadStatus | None = None,
+        source: str | None = None,
+        manager_id: int | None = None,
+        date_from: datetime | None = None,
+        date_to: datetime | None = None,
+        search: str | None = None,
+        page: int = 1,
+        per_page: int = 50,
+        tenant_id: int | None = None,
+    ) -> tuple[list[Lead], int]:
+        scoped_tenant_id = self._require_tenant_scope(
+            tenant_id,
+            operation="get_list_scoped",
+        )
+        return await self.get_list(
+            status=status,
+            source=source,
+            manager_id=manager_id,
+            date_from=date_from,
+            date_to=date_to,
+            search=search,
+            page=page,
+            per_page=per_page,
+            tenant_id=scoped_tenant_id,
+        )
 
     # ── Обновление ────────────────────────────────────
 
@@ -645,12 +688,15 @@ class LeadRepository:
         tg_id: int,
         tenant_id: int | None = None,
     ) -> Manager | None:
+        scoped_tenant_id = self._require_tenant_scope(
+            tenant_id,
+            operation="get_manager_by_tg_id",
+        )
         query = select(Manager).where(
             Manager.tg_id == tg_id,
             Manager.is_active == True,
+            Manager.tenant_id == scoped_tenant_id,
         )
-        if tenant_id is not None:
-            query = query.where(Manager.tenant_id == tenant_id)
         query = query.order_by(Manager.id.desc())
         result = await self.session.execute(query)
         return result.scalars().first()
@@ -668,18 +714,38 @@ class LeadRepository:
         return result.scalars().first()
 
     async def get_all_managers(self, include_inactive: bool = False, tenant_id: int | None = None) -> list[Manager]:
+        scoped_tenant_id = self._require_tenant_scope(
+            tenant_id,
+            operation="get_all_managers",
+        )
         query = select(Manager)
         if not include_inactive:
             query = query.where(Manager.is_active == True)
-        if tenant_id is not None:
-            query = query.where(Manager.tenant_id == tenant_id)
+        query = query.where(Manager.tenant_id == scoped_tenant_id)
+        result = await self.session.execute(query)
+        return result.scalars().all()
+
+    async def get_all_managers_any(self, include_inactive: bool = False) -> list[Manager]:
+        query = select(Manager)
+        if not include_inactive:
+            query = query.where(Manager.is_active == True)
         result = await self.session.execute(query)
         return result.scalars().all()
 
     async def count_active_managers(self, tenant_id: int | None = None) -> int:
+        scoped_tenant_id = self._require_tenant_scope(
+            tenant_id,
+            operation="count_active_managers",
+        )
+        q = select(func.count(Manager.id)).where(
+            Manager.is_active == True,
+            Manager.tenant_id == scoped_tenant_id,
+        )
+        result = await self.session.execute(q)
+        return result.scalar_one()
+
+    async def count_active_managers_any(self) -> int:
         q = select(func.count(Manager.id)).where(Manager.is_active == True)
-        if tenant_id is not None:
-            q = q.where(Manager.tenant_id == tenant_id)
         result = await self.session.execute(q)
         return result.scalar_one()
 
@@ -713,17 +779,20 @@ class LeadRepository:
         role: ManagerRole = ManagerRole.MANAGER,
         tenant_id: int | None = None,
     ) -> Manager:
+        scoped_tenant_id = self._require_tenant_scope(
+            tenant_id,
+            operation="upsert_manager_from_contact",
+        )
         existing = await self.get_manager_by_tg_id_any(
             tg_id,
-            tenant_id=tenant_id,
+            tenant_id=scoped_tenant_id,
         )
         if existing:
             existing.name = name
             if username:
                 existing.tg_username = username
             existing.is_active = True
-            if tenant_id is not None:
-                existing.tenant_id = tenant_id
+            existing.tenant_id = scoped_tenant_id
             # Preserve admin role if already set
             if existing.role != ManagerRole.ADMIN:
                 existing.role = role
@@ -735,7 +804,7 @@ class LeadRepository:
             name=name,
             username=username,
             role=role,
-            tenant_id=tenant_id,
+            tenant_id=scoped_tenant_id,
         )
 
     async def set_manager_role(
@@ -744,7 +813,11 @@ class LeadRepository:
         role: ManagerRole,
         tenant_id: int | None = None,
     ) -> Manager | None:
-        manager = await self.get_manager_by_tg_id(tg_id, tenant_id=tenant_id)
+        scoped_tenant_id = self._require_tenant_scope(
+            tenant_id,
+            operation="set_manager_role",
+        )
+        manager = await self.get_manager_by_tg_id(tg_id, tenant_id=scoped_tenant_id)
         if not manager:
             return None
         manager.role = role
@@ -752,7 +825,11 @@ class LeadRepository:
         return manager
 
     async def deactivate_manager(self, tg_id: int, tenant_id: int | None = None) -> bool:
-        manager = await self.get_manager_by_tg_id(tg_id, tenant_id=tenant_id)
+        scoped_tenant_id = self._require_tenant_scope(
+            tenant_id,
+            operation="deactivate_manager",
+        )
+        manager = await self.get_manager_by_tg_id(tg_id, tenant_id=scoped_tenant_id)
         if not manager:
             return False
         manager.is_active = False
@@ -762,9 +839,8 @@ class LeadRepository:
             Reminder.is_sent == False,
             Reminder.remind_at > _naive(now),
         ]
-        if tenant_id is not None:
-            tenant_leads_subquery = select(Lead.id).where(Lead.tenant_id == tenant_id)
-            reminders_query.append(Reminder.lead_id.in_(tenant_leads_subquery))
+        tenant_leads_subquery = select(Lead.id).where(Lead.tenant_id == scoped_tenant_id)
+        reminders_query.append(Reminder.lead_id.in_(tenant_leads_subquery))
         await self.session.execute(
             update(Reminder)
             .where(*reminders_query)

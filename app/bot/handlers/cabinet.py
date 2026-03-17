@@ -374,7 +374,10 @@ async def cab_export_do(callback: CallbackQuery, sender: TelegramSafeSender, ten
     if not ctx:
         await sender.answer(callback, "в›”пёЏ РќРµС‚ РґРѕСЃС‚СѓРїР°.", show_alert=True)
         return
-    tenant_id = tenant.id if tenant else None
+    if tenant is None:
+        await sender.answer(callback, "No tenant context.", show_alert=True)
+        return
+    tenant_id = tenant.id
     await sender.answer(callback)
 
     parsed = safe_parse(callback.data, expected_parts=4, expected_types=(str, str, str, str))
@@ -467,7 +470,10 @@ async def cab_analytics_conversion_period(callback: CallbackQuery, sender: Teleg
     if not ctx:
         await sender.answer(callback, "в›”пёЏ РќРµС‚ РґРѕСЃС‚СѓРїР°.", show_alert=True)
         return
-    tenant_id = tenant.id if tenant else None
+    if tenant is None:
+        await sender.answer(callback, "No tenant context.", show_alert=True)
+        return
+    tenant_id = tenant.id
     await sender.answer(callback)
     parsed = safe_parse(callback.data, expected_parts=3, expected_types=(str, str, str))
     if not parsed:
@@ -531,7 +537,7 @@ async def cab_analytics_activity_period(callback: CallbackQuery, sender: Telegra
     _, _, period = parsed
     async with AsyncSessionLocal() as session:
         repo = LeadRepository(session)
-        managers = await repo.get_all_managers(tenant_id=tenant.id if tenant else None)
+        managers = await repo.get_all_managers(tenant_id=tenant.id)
 
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text="Р’СЃРµ", callback_data=f"cab:analytics_activity_run:{period}:all"))
@@ -559,7 +565,10 @@ async def cab_analytics_activity_run(callback: CallbackQuery, sender: TelegramSa
     if not ctx:
         await sender.answer(callback, "в›”пёЏ РќРµС‚ РґРѕСЃС‚СѓРїР°.", show_alert=True)
         return
-    tenant_id = tenant.id if tenant else None
+    if tenant is None:
+        await sender.answer(callback, "No tenant context.", show_alert=True)
+        return
+    tenant_id = tenant.id
     await sender.answer(callback)
 
     parsed = safe_parse(callback.data, expected_parts=4, expected_types=(str, str, str, str))

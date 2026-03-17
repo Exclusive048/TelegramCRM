@@ -591,7 +591,7 @@ async def cmd_add_manager(message: Message, sender: TelegramSafeSender, tenant=N
         repo = LeadRepository(session)
         existing = await repo.get_manager_by_tg_id(
             target.id,
-            tenant_id=tenant.id if tenant else None,
+            tenant_id=tenant.id,
         )
 
         if existing:
@@ -618,7 +618,7 @@ async def cmd_add_manager(message: Message, sender: TelegramSafeSender, tenant=N
             name=target.full_name,
             username=target.username,
             role=ManagerRole.MANAGER,
-            tenant_id=tenant.id if tenant else None,
+            tenant_id=tenant.id,
         )
         await session.commit()
 
@@ -680,7 +680,7 @@ async def cmd_make_admin(message: Message, sender: TelegramSafeSender, tenant=No
         manager = await repo.set_manager_role(
             target.id,
             ManagerRole.ADMIN,
-            tenant_id=tenant.id if tenant else None,
+            tenant_id=tenant.id,
         )
         if not manager:
             manager = await repo.create_manager(
@@ -688,7 +688,7 @@ async def cmd_make_admin(message: Message, sender: TelegramSafeSender, tenant=No
                 name=target.full_name,
                 username=target.username,
                 role=ManagerRole.ADMIN,
-                tenant_id=tenant.id if tenant else None,
+                tenant_id=tenant.id,
             )
         await session.commit()
 
@@ -746,7 +746,7 @@ async def cmd_remove_manager(message: Message, sender: TelegramSafeSender, tenan
         repo = LeadRepository(session)
         ok = await repo.deactivate_manager(
             target.id,
-            tenant_id=tenant.id if tenant else None,
+            tenant_id=tenant.id,
         )
         await session.commit()
 
@@ -794,7 +794,7 @@ async def cmd_managers(message: Message, sender: TelegramSafeSender, tenant=None
 
     async with AsyncSessionLocal() as session:
         repo = LeadRepository(session)
-        managers = await repo.get_all_managers(tenant_id=tenant.id if tenant else None)
+        managers = await repo.get_all_managers(tenant_id=tenant.id)
 
     if not managers:
         await sender.send_ephemeral_text(

@@ -405,7 +405,7 @@ async def get_leads(
     tenant = request.state.tenant
     tenant_id = tenant.id if tenant else None
     repo = LeadRepository(db)
-    leads, total = await repo.get_list(
+    leads, total = await repo.get_list_scoped(
         status=status,
         source=source,
         manager_id=manager_id,
@@ -436,7 +436,7 @@ async def get_lead(
     tenant = request.state.tenant
     tenant_id = tenant.id if tenant else None
     repo = LeadRepository(db)
-    lead = await repo.get_by_id(lead_id, tenant_id=tenant_id)
+    lead = await repo.get_by_id_scoped(lead_id, tenant_id=tenant_id)
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
     return LeadResponse.model_validate(lead)
@@ -456,7 +456,7 @@ async def update_lead(
     tenant = request.state.tenant
     tenant_id = tenant.id if tenant else None
     repo = LeadRepository(db)
-    lead = await repo.get_by_id(lead_id, tenant_id=tenant_id)
+    lead = await repo.get_by_id_scoped(lead_id, tenant_id=tenant_id)
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
 
@@ -491,7 +491,7 @@ async def add_comment(
     tenant = request.state.tenant
     tenant_id = tenant.id if tenant else None
     repo = LeadRepository(db)
-    lead = await repo.get_by_id(lead_id, tenant_id=tenant_id)
+    lead = await repo.get_by_id_scoped(lead_id, tenant_id=tenant_id)
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
     group_id = tenant.group_id if tenant else 0

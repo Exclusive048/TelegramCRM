@@ -25,10 +25,18 @@ class LeadService:
         self.group_id = group_id
         self.tenant_id = tenant_id
 
+    def _tenant_scope(self, *, action: str) -> int | None:
+        if self.tenant_id is None:
+            logger.warning(f"lead_action_blocked action={action} reason=tenant_scope_missing")
+            return None
+        return self.tenant_id
+
     async def create_lead(self, data: dict) -> Lead:
+        tenant_id = self._tenant_scope(action="create")
+        if tenant_id is None:
+            raise ValueError("tenant_id is required for create_lead")
         payload = dict(data)
-        if payload.get("tenant_id") is None and self.tenant_id is not None:
-            payload["tenant_id"] = self.tenant_id
+        payload["tenant_id"] = tenant_id
         lead = await self.repo.create(payload)
         logger.info(f"lead_action=create lead_id={lead.id} source={lead.source}")
         topic_id = None
@@ -59,10 +67,12 @@ class LeadService:
         manager_tg_id: int,
         source_ref: MessageRef | None,
     ) -> Lead | None:
-        if self.tenant_id is not None:
-            in_tenant = await self.repo.get_by_id(lead_id, tenant_id=self.tenant_id)
-            if not in_tenant:
-                return None
+        tenant_id = self._tenant_scope(action="take_in_progress")
+        if tenant_id is None:
+            return None
+        in_tenant = await self.repo.get_by_id_scoped(lead_id, tenant_id=tenant_id)
+        if not in_tenant:
+            return None
         manager = await self._get_manager(manager_tg_id)
         if manager_tg_id and not manager:
             return None
@@ -84,10 +94,12 @@ class LeadService:
         amount: float | None,
         source_ref: MessageRef | None,
     ) -> Lead | None:
-        if self.tenant_id is not None:
-            in_tenant = await self.repo.get_by_id(lead_id, tenant_id=self.tenant_id)
-            if not in_tenant:
-                return None
+        tenant_id = self._tenant_scope(action="mark_paid")
+        if tenant_id is None:
+            return None
+        in_tenant = await self.repo.get_by_id_scoped(lead_id, tenant_id=tenant_id)
+        if not in_tenant:
+            return None
         manager = await self._get_manager(manager_tg_id)
         if manager_tg_id and not manager:
             return None
@@ -114,10 +126,12 @@ class LeadService:
         manager_tg_id: int,
         source_ref: MessageRef | None,
     ) -> Lead | None:
-        if self.tenant_id is not None:
-            in_tenant = await self.repo.get_by_id(lead_id, tenant_id=self.tenant_id)
-            if not in_tenant:
-                return None
+        tenant_id = self._tenant_scope(action="mark_success")
+        if tenant_id is None:
+            return None
+        in_tenant = await self.repo.get_by_id_scoped(lead_id, tenant_id=tenant_id)
+        if not in_tenant:
+            return None
         manager = await self._get_manager(manager_tg_id)
         if manager_tg_id and not manager:
             return None
@@ -144,10 +158,12 @@ class LeadService:
         reason: str = "",
         source_ref: MessageRef | None = None,
     ) -> Lead | None:
-        if self.tenant_id is not None:
-            in_tenant = await self.repo.get_by_id(lead_id, tenant_id=self.tenant_id)
-            if not in_tenant:
-                return None
+        tenant_id = self._tenant_scope(action="reject_lead")
+        if tenant_id is None:
+            return None
+        in_tenant = await self.repo.get_by_id_scoped(lead_id, tenant_id=tenant_id)
+        if not in_tenant:
+            return None
         manager = await self._get_manager(manager_tg_id)
         if manager_tg_id and not manager:
             return None
@@ -169,7 +185,10 @@ class LeadService:
         return lead
 
     async def clone_lead(self, lead_id: int) -> Lead | None:
-        lead = await self.repo.get_by_id(lead_id, tenant_id=self.tenant_id)
+        tenant_id = self._tenant_scope(action="clone_lead")
+        if tenant_id is None:
+            return None
+        lead = await self.repo.get_by_id_scoped(lead_id, tenant_id=tenant_id)
         if not lead:
             return None
 
@@ -181,7 +200,7 @@ class LeadService:
             "service": lead.service,
             "comment": lead.comment or "",
             "status": LeadStatus.NEW,
-            "tenant_id": self.tenant_id if self.tenant_id is not None else lead.tenant_id,
+            "tenant_id": tenant_id,
         }
         clone = await self.repo.create(data)
         logger.info(f"lead_action=clone source_id={lead_id} clone_id={clone.id}")
@@ -214,13 +233,16 @@ class LeadService:
         author: str,
         target_ref: MessageRef | None,
     ):
+        tenant_id = self._tenant_scope(action="add_comment")
+        if tenant_id is None:
+            return
         await self.repo.add_comment(
             lead_id=lead_id,
             text=text,
             author=author,
-            tenant_id=self.tenant_id,
+            tenant_id=tenant_id,
         )
-        lead = await self.repo.get_by_id(lead_id, tenant_id=self.tenant_id)
+        lead = await self.repo.get_by_id_scoped(lead_id, tenant_id=tenant_id)
         if not lead:
             return
 
@@ -269,7 +291,10 @@ class LeadService:
         )
 
     async def refresh_card(self, lead_id: int):
-        lead = await self.repo.get_by_id(lead_id, tenant_id=self.tenant_id)
+        tenant_id = self._tenant_scope(action="refresh_card")
+        if tenant_id is None:
+            return
+        lead = await self.repo.get_by_id_scoped(lead_id, tenant_id=tenant_id)
         if not lead:
             return
 
@@ -285,9 +310,12 @@ class LeadService:
     async def _get_manager(self, manager_tg_id: int) -> Manager | None:
         if not manager_tg_id:
             return None
+        tenant_id = self._tenant_scope(action="resolve_manager")
+        if tenant_id is None:
+            return None
         return await self.repo.get_manager_by_tg_id(
             manager_tg_id,
-            tenant_id=self.tenant_id,
+            tenant_id=tenant_id,
         )
 
     async def _topic_for_status(self, status: LeadStatus) -> int | None:
@@ -338,7 +366,10 @@ class LeadService:
     async def _post_card(self, lead: Lead, topic_id: int) -> MessageRef | None:
         if not self.group_id:
             return None
-        lead_full = await self.repo.get_by_id(lead.id, tenant_id=self.tenant_id)
+        tenant_id = self._tenant_scope(action="post_card")
+        if tenant_id is None:
+            return None
+        lead_full = await self.repo.get_by_id_scoped(lead.id, tenant_id=tenant_id)
         if not lead_full:
             return None
         text, keyboard = await self._build_card_payload(lead_full)
@@ -367,7 +398,10 @@ class LeadService:
         *,
         action: str,
     ):
-        lead_full = await self.repo.get_by_id(lead.id, tenant_id=self.tenant_id)
+        tenant_id = self._tenant_scope(action="move_card")
+        if tenant_id is None:
+            return
+        lead_full = await self.repo.get_by_id_scoped(lead.id, tenant_id=tenant_id)
         if not lead_full:
             return
 

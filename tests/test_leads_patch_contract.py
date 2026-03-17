@@ -67,6 +67,9 @@ def test_update_lead_returns_404_when_lead_not_found(monkeypatch) -> None:
         async def get_by_id(self, lead_id: int, tenant_id: int | None = None):
             return None
 
+        async def get_by_id_scoped(self, lead_id: int, tenant_id: int | None = None):
+            return await self.get_by_id(lead_id, tenant_id=tenant_id)
+
     monkeypatch.setattr(leads, "LeadRepository", _FakeRepo)
 
     body = LeadUpdateRequest(status=LeadStatus.PAID)
@@ -93,6 +96,9 @@ def test_update_lead_returns_409_for_unsupported_status_transition(monkeypatch) 
 
         async def get_by_id(self, lead_id: int, tenant_id: int | None = None):
             return {"id": lead_id}
+
+        async def get_by_id_scoped(self, lead_id: int, tenant_id: int | None = None):
+            return await self.get_by_id(lead_id, tenant_id=tenant_id)
 
     calls = {"method": None}
 
@@ -146,6 +152,9 @@ def test_update_lead_runs_status_flow_for_supported_transition(monkeypatch) -> N
 
         async def get_by_id(self, lead_id: int, tenant_id: int | None = None):
             return {"id": lead_id}
+
+        async def get_by_id_scoped(self, lead_id: int, tenant_id: int | None = None):
+            return await self.get_by_id(lead_id, tenant_id=tenant_id)
 
     captured: dict[str, object] = {}
 
