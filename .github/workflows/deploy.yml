@@ -1,161 +1,164 @@
 name: Deploy to Production
 
 on:
-  push:
-    branches:
-      - main
-  workflow_dispatch:   # ручной запуск из GitHub UI если нужно
+    push:
+        branches:
+            - main
+    workflow_dispatch: # ручной запуск из GitHub UI если нужно
 
 jobs:
+    # ── 1. Тесты и линтинг ─────────────────────────────────────────────────────
+    test:
+        name: Lint & Test
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
 
-  # ── 1. Тесты и линтинг ─────────────────────────────────────────────────────
-  test:
-    name: Lint & Test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+            - name: Set up Python
+              uses: actions/setup-python@v5
+              with:
+                  python-version: "3.12"
+                  cache: "pip"
+            - name: Prepare packaging toolchain
+              run: |
+                  python -m pip install --upgrade pip
+                  python -m pip install --upgrade wheel
+                  python -m pip install "setuptools<81"
+            - name: Install dependencies
+              run: |
+                  pip install -r requirements.txt
+                  pip install -r requirements-dev.txt
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: "pip"
+            - name: Ruff lint
+              run: ruff check . --output-format=github
 
-      - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
-          pip install -r requirements-dev.txt
+            - name: Run tests
+              run: pytest tests/ -x -q --tb=short
+              continue-on-error: true # не блокировать деплой пока тестов мало
+              # Убрать continue-on-error когда покроете тестами
 
-      - name: Ruff lint
-        run: ruff check . --output-format=github
+    # ── 2. Сборка и пуш Docker-образа ──────────────────────────────────────────
+    build:
+        name: Build & Push Docker Image
+        runs-on: ubuntu-latest
+        needs: test
+        outputs:
+            image_tag: ${{ steps.meta.outputs.tags }}
+            short_sha: ${{ steps.sha.outputs.short }}
+        steps:
+            - uses: actions/checkout@v4
 
-      - name: Run tests
-        run: pytest tests/ -x -q --tb=short
-        continue-on-error: true   # не блокировать деплой пока тестов мало
-        # Убрать continue-on-error когда покроете тестами
+            - name: Get short SHA
+              id: sha
+              run: echo "short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
 
-  # ── 2. Сборка и пуш Docker-образа ──────────────────────────────────────────
-  build:
-    name: Build & Push Docker Image
-    runs-on: ubuntu-latest
-    needs: test
-    outputs:
-      image_tag: ${{ steps.meta.outputs.tags }}
-      short_sha: ${{ steps.sha.outputs.short }}
-    steps:
-      - uses: actions/checkout@v4
+            - name: Set up Docker Buildx
+              uses: docker/setup-buildx-action@v3
 
-      - name: Get short SHA
-        id: sha
-        run: echo "short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+            - name: Login to GitHub Container Registry
+              uses: docker/login-action@v3
+              with:
+                  registry: ghcr.io
+                  username: ${{ github.actor }}
+                  password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+            - name: Docker metadata
+              id: meta
+              uses: docker/metadata-action@v5
+              with:
+                  images: ghcr.io/exclusive048/telegramcrm
+                  tags: |
+                      type=sha,prefix=sha-
+                      type=raw,value=latest,enable={{is_default_branch}}
 
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+            - name: Build and push
+              uses: docker/build-push-action@v5
+              with:
+                  context: .
+                  push: true
+                  tags: ${{ steps.meta.outputs.tags }}
+                  labels: ${{ steps.meta.outputs.labels }}
+                  cache-from: type=gha
+                  cache-to: type=gha,mode=max
 
-      - name: Docker metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/exclusive048/telegramcrm
-          tags: |
-            type=sha,prefix=sha-
-            type=raw,value=latest,enable={{is_default_branch}}
+    # ── 3. Деплой на VPS ───────────────────────────────────────────────────────
+    deploy:
+        name: Deploy to VPS
+        runs-on: ubuntu-latest
+        needs: build
+        environment: production # требует ручного подтверждения в GitHub если настроено
+        steps:
+            - uses: actions/checkout@v4
 
-      - name: Build and push
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+            - name: Deploy via SSH
+              uses: appleboy/ssh-action@v1
+              with:
+                  host: ${{ secrets.VPS_HOST }}
+                  username: ${{ secrets.VPS_USER }}
+                  key: ${{ secrets.VPS_SSH_KEY }}
+                  port: ${{ secrets.VPS_PORT || 22 }}
+                  script: |
+                      set -euo pipefail
 
-  # ── 3. Деплой на VPS ───────────────────────────────────────────────────────
-  deploy:
-    name: Deploy to VPS
-    runs-on: ubuntu-latest
-    needs: build
-    environment: production   # требует ручного подтверждения в GitHub если настроено
-    steps:
-      - uses: actions/checkout@v4
+                      echo "=== Deploy started: $(date -u) ==="
+                      cd /opt/telegramcrm
 
-      - name: Deploy via SSH
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.VPS_HOST }}
-          username: ${{ secrets.VPS_USER }}
-          key: ${{ secrets.VPS_SSH_KEY }}
-          port: ${{ secrets.VPS_PORT || 22 }}
-          script: |
-            set -euo pipefail
+                      # 1) Code update
+                      git fetch origin main
+                      git reset --hard origin/main
 
-            echo "=== Deploy started: $(date -u) ==="
-            cd /opt/telegramcrm
+                      # 2) Login to GHCR (лучше использовать PAT, но оставляю как есть)
+                      echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
 
-            # 1) Code update
-            git fetch origin main
-            git reset --hard origin/main
+                      # 3) Образ
+                      export DOCKER_IMAGE=ghcr.io/exclusive048/telegramcrm:latest
 
-            # 2) Login to GHCR (лучше использовать PAT, но оставляю как есть)
-            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+                      # 4) Подтверди имена сервисов (ОБЯЗАТЕЛЬНО ПРОВЕРЬ!)
+                      API_SVC="api"
+                      CRM_BOT_SVC="crm-bot"
+                      MASTER_BOT_SVC="master-bot"
 
-            # 3) Образ
-            export DOCKER_IMAGE=ghcr.io/exclusive048/telegramcrm:latest
+                      echo "=== Compose services ==="
+                      docker compose config --services
 
-            # 4) Подтверди имена сервисов (ОБЯЗАТЕЛЬНО ПРОВЕРЬ!)
-            API_SVC="api"
-            CRM_BOT_SVC="crm-bot"
-            MASTER_BOT_SVC="master-bot"
+                      echo "=== Pull images ==="
+                      docker compose pull "$API_SVC" "$CRM_BOT_SVC" "$MASTER_BOT_SVC"
 
-            echo "=== Compose services ==="
-            docker compose config --services
+                      echo "=== Run migrations (one-off) ==="
+                      # Важно: миграции гоняем только один раз (обычно из API контейнера)
+                      docker compose run --rm "$API_SVC" python migrate.py dev
 
-            echo "=== Pull images ==="
-            docker compose pull "$API_SVC" "$CRM_BOT_SVC" "$MASTER_BOT_SVC"
+                      echo "=== Restart services ==="
+                      docker compose up -d --no-deps --force-recreate "$API_SVC" "$CRM_BOT_SVC" "$MASTER_BOT_SVC"
 
-            echo "=== Run migrations (one-off) ==="
-            # Важно: миграции гоняем только один раз (обычно из API контейнера)
-            docker compose run --rm "$API_SVC" python migrate.py dev
+                      echo "=== Status ==="
+                      docker compose ps
 
-            echo "=== Restart services ==="
-            docker compose up -d --no-deps --force-recreate "$API_SVC" "$CRM_BOT_SVC" "$MASTER_BOT_SVC"
+                      echo "=== Cleanup ==="
+                      docker image prune -f
 
-            echo "=== Status ==="
-            docker compose ps
+                      echo "=== Deploy finished: $(date -u) ==="
 
-            echo "=== Cleanup ==="
-            docker image prune -f
+            - name: Notify on success
+              if: success()
+              uses: appleboy/telegram-action@master
+              with:
+                  to: ${{ secrets.TELEGRAM_NOTIFY_CHAT_ID }}
+                  token: ${{ secrets.TELEGRAM_NOTIFY_BOT_TOKEN }}
+                  message: |
+                      ✅ Deploy успешен
+                      Ветка: main
+                      Коммит: ${{ github.event.head_commit.message }}
+                      SHA: ${{ needs.build.outputs.short_sha }}
 
-            echo "=== Deploy finished: $(date -u) ==="
-
-      - name: Notify on success
-        if: success()
-        uses: appleboy/telegram-action@master
-        with:
-          to: ${{ secrets.TELEGRAM_NOTIFY_CHAT_ID }}
-          token: ${{ secrets.TELEGRAM_NOTIFY_BOT_TOKEN }}
-          message: |
-            ✅ Deploy успешен
-            Ветка: main
-            Коммит: ${{ github.event.head_commit.message }}
-            SHA: ${{ needs.build.outputs.short_sha }}
-
-      - name: Notify on failure
-        if: failure()
-        uses: appleboy/telegram-action@master
-        with:
-          to: ${{ secrets.TELEGRAM_NOTIFY_CHAT_ID }}
-          token: ${{ secrets.TELEGRAM_NOTIFY_BOT_TOKEN }}
-          message: |
-            ❌ Deploy УПАЛ
-            Ветка: main
-            SHA: ${{ needs.build.outputs.short_sha }}
-            Смотри: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            - name: Notify on failure
+              if: failure()
+              uses: appleboy/telegram-action@master
+              with:
+                  to: ${{ secrets.TELEGRAM_NOTIFY_CHAT_ID }}
+                  token: ${{ secrets.TELEGRAM_NOTIFY_BOT_TOKEN }}
+                  message: |
+                      ❌ Deploy УПАЛ
+                      Ветка: main
+                      SHA: ${{ needs.build.outputs.short_sha }}
+                      Смотри: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
