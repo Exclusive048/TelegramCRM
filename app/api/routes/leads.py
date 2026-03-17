@@ -40,7 +40,7 @@ _SENSITIVE_LOG_FIELDS = {
     "extra",
 }
 
-# РџРѕР»СЏ РєРѕС‚РѕСЂС‹Рµ РёСЃРєР»СЋС‡Р°РµРј РёР· extra (С‚РµС…РЅРёС‡РµСЃРєРёРµ / РјСѓСЃРѕСЂ)
+# Поля которые исключаем из extra (технические / мусор)
 _SKIP_EXTRA = {
     "Name", "name", "NAME",
     "Phone", "phone", "PHONE",
@@ -157,7 +157,7 @@ def _safe_lead_flags(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _pick(data: dict, *keys: str, default: str = "") -> str:
-    """Р‘РµСЂС‘С‚ РїРµСЂРІРѕРµ РЅРµРїСѓСЃС‚РѕРµ Р·РЅР°С‡РµРЅРёРµ РёР· СЃРїРёСЃРєР° РєР»СЋС‡РµР№."""
+    """Берёт первое непустое значение из списка ключей."""
     for k in keys:
         v = data.get(k)
         if v and str(v).strip():
@@ -167,21 +167,21 @@ def _pick(data: dict, *keys: str, default: str = "") -> str:
 
 def _parse_tilda(data: dict) -> dict:
     """
-    РЈРЅРёРІРµСЂСЃР°Р»СЊРЅС‹Р№ РїР°СЂСЃРµСЂ Tilda-С„РѕСЂРј.
-    РџРѕРґРґРµСЂР¶РёРІР°РµС‚ СЃС‚Р°РЅРґР°СЂС‚РЅС‹Рµ РїРѕР»СЏ (Name/Phone) Рё РЅРµСЃС‚Р°РЅРґР°СЂС‚РЅС‹Рµ
+    Универсальный парсер Tilda-форм.
+    Поддерживает стандартные поля (Name/Phone) и нестандартные
     (messenger-id, program, city Рё С‚.Рґ.).
     """
-    # в”Ђв”Ђ РРјСЏ в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
-    name = _pick(data, "Name", "name", "NAME", "Р¤РРћ", "fio", "fullname")
+    # ── Имя ───────────────────────────────────────────────────────────────────
+    name = _pick(data, "Name", "name", "NAME", "ФИО", "fio", "fullname")
     if not name:
-        # РЎРѕР±РёСЂР°РµРј РёР· С‡Р°СЃС‚РµР№
+        # Собираем из частей
         parts = [
             _pick(data, "firstname", "Firstname", "first_name"),
             _pick(data, "lastname", "Lastname", "last_name"),
         ]
         name = " ".join(p for p in parts if p).strip()
     if not name:
-        name = _pick(data, "formname", "program", default="Р—Р°СЏРІРєР° СЃ СЃР°Р№С‚Р°")
+        name = _pick(data, "formname", "program", default="Заявка с сайта")
 
     # в”Ђв”Ђ РўРµР»РµС„РѕРЅ / РєРѕРЅС‚Р°РєС‚ в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
     phone = _pick(data, "Phone", "phone", "PHONE", "tel", "Tel", "telephone")
@@ -197,34 +197,34 @@ def _parse_tilda(data: dict) -> dict:
     # в”Ђв”Ђ Email в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
     email = _pick(data, "email", "Email", "EMAIL") or None
 
-    # в”Ђв”Ђ РЈСЃР»СѓРіР° в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+    # ── Услуга ────────────────────────────────────────────────────────────────
     service = _pick(data, "Service", "service", "program", "Program") or None
     if not service:
         formname = _pick(data, "formname")
         if formname:
             service = formname
 
-    # в”Ђв”Ђ РљРѕРјРјРµРЅС‚Р°СЂРёР№ в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+    # ── Комментарий ───────────────────────────────────────────────────────────
     comment_parts = []
 
     explicit_comment = _pick(data, "Comment", "comment", "Message", "message", "Messages")
     if explicit_comment:
         comment_parts.append(explicit_comment)
 
-    # Р”РѕР±Р°РІР»СЏРµРј РіРµРѕ/РІСЂРµРјСЏ РµСЃР»Рё РµСЃС‚СЊ
+    # Добавляем гео/время если есть
     for field, label in [
         ("city", "Р“РѕСЂРѕРґ"),
         ("City", "Р“РѕСЂРѕРґ"),
         ("country", "РЎС‚СЂР°РЅР°"),
-        ("location", "Р›РѕРєР°С†РёСЏ"),
-        ("time", "Р’СЂРµРјСЏ"),
+        ("location", "Локация"),
+        ("time", "Время"),
     ]:
         val = data.get(field)
         if val and str(val).strip():
             comment_parts.append(f"{label}: {val}")
 
     if not comment_parts:
-        comment_parts.append("Р—Р°СЏРІРєР° СЃ Tilda")
+        comment_parts.append("Заявка с Tilda")
 
     comment = " | ".join(comment_parts)
 
@@ -232,7 +232,7 @@ def _parse_tilda(data: dict) -> dict:
     utm_campaign = _pick(data, "utm_campaign", "UTM_CAMPAIGN") or None
     utm_source = _pick(data, "utm_source", "utm_medium") or None
 
-    # в”Ђв”Ђ Extra вЂ” РІСЃС‘ РѕСЃС‚Р°Р»СЊРЅРѕРµ РїРѕР»РµР·РЅРѕРµ в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+    # ── Extra — всё остальное полезное ────────────────────────────────────────
     extra: dict[str, str] = {}
     for k, v in list(data.items()):
         if k in _SKIP_EXTRA:
@@ -405,7 +405,7 @@ async def create_lead(
     )
     return CreateLeadResponse(lead_id=lead.id, tg_message_id=lead.tg_message_id)
 
-# в”Ђв”Ђ POST /leads/tilda вЂ” webhook РґР»СЏ Tilda в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+# ── POST /leads/tilda — webhook для Tilda ─────────────────────────────────────
 
 @router.post("/tilda", response_model=OkResponse, status_code=201, tags=["Integrations"])
 @limiter.limit("60/minute")

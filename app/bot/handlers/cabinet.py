@@ -1,6 +1,6 @@
 """
-/cabinet вЂ” РєР°Р±РёРЅРµС‚ Р°РґРјРёРЅРёСЃС‚СЂРёСЂРѕРІР°РЅРёСЏ.
-Р”РѕСЃС‚СѓРїРµРЅ С‚РѕР»СЊРєРѕ CRM-Р°РґРјРёРЅРёСЃС‚СЂР°С‚РѕСЂР°Рј.
+/cabinet — кабинет администрирования.
+Доступен только CRM-администраторам.
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ from app.telegram.safe_sender import TelegramSafeSender
 
 router = Router()
 
-CABINET_HOME_TEXT = "рџ—‚ <b>РљР°Р±РёРЅРµС‚</b>\n\nР’С‹Р±РµСЂРёС‚Рµ СЂР°Р·РґРµР»."
+CABINET_HOME_TEXT = "🗂 <b>Кабинет</b>\n\nВыберите раздел."
 
 
 def _get_topic_spec(key: TopicKey):
@@ -196,12 +196,12 @@ async def ensure_cabinet_message(sender: TelegramSafeSender, chat_id: int) -> tu
 def _main_keyboard() -> InlineKeyboardBuilder:
     builder = InlineKeyboardBuilder()
     builder.row(
-        InlineKeyboardButton(text="рџ“¤ Р­РєСЃРїРѕСЂС‚ РєР»РёРµРЅС‚РѕРІ", callback_data="cab:export"),
-        InlineKeyboardButton(text="рџ“Љ РђРЅР°Р»РёС‚РёРєР°", callback_data="cab:analytics"),
+        InlineKeyboardButton(text="📤 Экспорт клиентов", callback_data="cab:export"),
+        InlineKeyboardButton(text="📊 Аналитика", callback_data="cab:analytics"),
     )
     builder.row(
-        InlineKeyboardButton(text="рџ”— РРЅС‚РµРіСЂР°С†РёРё", callback_data="cab:integrations"),
-        InlineKeyboardButton(text="рџ’і РўР°СЂРёС„", callback_data="cab:tariff"),
+        InlineKeyboardButton(text="🔗 Интеграции", callback_data="cab:integrations"),
+        InlineKeyboardButton(text="💳 Тариф", callback_data="cab:tariff"),
     )
     return builder
 
@@ -214,23 +214,23 @@ def _stage_keyboard(prefix: str) -> InlineKeyboardBuilder:
     )
     builder.row(
         InlineKeyboardButton(text="РћРїР»Р°С‡РµРЅРѕ", callback_data=f"{prefix}:paid"),
-        InlineKeyboardButton(text="РЈСЃРїРµС…", callback_data=f"{prefix}:success"),
+        InlineKeyboardButton(text="Успех", callback_data=f"{prefix}:success"),
     )
     builder.row(
         InlineKeyboardButton(text="РћС‚РєР»РѕРЅРµРЅРѕ", callback_data=f"{prefix}:rejected"),
     )
-    builder.row(InlineKeyboardButton(text="в¬…пёЏ РќР°Р·Р°Рґ", callback_data="cab:back"))
+    builder.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="cab:back"))
     return builder
 
 
 def _period_keyboard(prefix: str) -> InlineKeyboardBuilder:
     builder = InlineKeyboardBuilder()
     builder.row(
-        InlineKeyboardButton(text="РЎРµРіРѕРґРЅСЏ", callback_data=f"{prefix}:today"),
-        InlineKeyboardButton(text="РќРµРґРµР»СЏ", callback_data=f"{prefix}:week"),
-        InlineKeyboardButton(text="РњРµСЃСЏС†", callback_data=f"{prefix}:month"),
+        InlineKeyboardButton(text="Сегодня", callback_data=f"{prefix}:today"),
+        InlineKeyboardButton(text="Неделя", callback_data=f"{prefix}:week"),
+        InlineKeyboardButton(text="Месяц", callback_data=f"{prefix}:month"),
     )
-    builder.row(InlineKeyboardButton(text="в¬…пёЏ РќР°Р·Р°Рґ", callback_data="cab:back"))
+    builder.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="cab:back"))
     return builder
 
 
@@ -246,11 +246,11 @@ def _period_dates(period: str) -> tuple[datetime, datetime]:
 def build_workbook(leads) -> bytes:
     wb = openpyxl.Workbook()
     ws = wb.active
-    ws.title = "Р—Р°СЏРІРєРё"
+    ws.title = "Заявки"
 
     headers = [
-        "ID", "РРјСЏ", "РўРµР»РµС„РѕРЅ", "Р­Р». РїРѕС‡С‚Р°", "РСЃС‚РѕС‡РЅРёРє", "РЈСЃР»СѓРіР°", "РЎСѓРјРјР°",
-        "РЎС‚Р°С‚СѓСЃ", "РњРµРЅРµРґР¶РµСЂ", "РљРѕРјРјРµРЅС‚Р°СЂРёР№", "UTM", "РЎРѕР·РґР°РЅР°", "Р—Р°РєСЂС‹С‚Р°",
+        "ID", "Имя", "Телефон", "Эл. почта", "Источник", "Услуга", "Сумма",
+        "Статус", "Менеджер", "Комментарий", "UTM", "Создана", "Закрыта",
     ]
     header_fill = PatternFill("solid", fgColor="1A56DB")
     header_font = Font(bold=True, color="FFFFFF")
@@ -265,7 +265,7 @@ def build_workbook(leads) -> bytes:
         "new": "Р›РёРґ",
         "in_progress": "Р’ СЂР°Р±РѕС‚Рµ",
         "paid": "РћРїР»Р°С‡РµРЅРѕ",
-        "success": "РЈСЃРїРµС…",
+        "success": "Успех",
         "rejected": "РћС‚РєР»РѕРЅРµРЅРѕ",
     }
 
@@ -304,7 +304,7 @@ async def cmd_cabinet(message: Message, sender: TelegramSafeSender, tenant=None)
         await sender.send_ephemeral_text(
             chat_id=message.chat.id,
             message_thread_id=message.message_thread_id,
-            text="в›”пёЏ РљР°Р±РёРЅРµС‚ РґРѕСЃС‚СѓРїРµРЅ С‚РѕР»СЊРєРѕ CRM-Р°РґРјРёРЅРёСЃС‚СЂР°С‚РѕСЂР°Рј.",
+            text="⛔️ Кабинет доступен только CRM-администраторам.",
             ttl_sec=TTL_ERROR_SEC,
         )
         return
@@ -335,13 +335,13 @@ async def cab_back(callback: CallbackQuery, sender: TelegramSafeSender, tenant=N
 async def cab_export_menu(callback: CallbackQuery, sender: TelegramSafeSender, tenant=None):
     ctx = await resolve_admin_context(callback, tenant, sender)
     if not ctx:
-        await sender.answer(callback, "в›”пёЏ РќРµС‚ РґРѕСЃС‚СѓРїР°.", show_alert=True)
+        await sender.answer(callback, "⛔️ Нет доступа.", show_alert=True)
         return
     await sender.answer(callback)
     await sender.edit_text(
         chat_id=callback.message.chat.id,
         message_id=callback.message.message_id,
-        text="рџ“¤ Р­РєСЃРїРѕСЂС‚ Р·Р°СЏРІРѕРє.\nР’С‹Р±РµСЂРёС‚Рµ СЌС‚Р°Рї.",
+        text="📤 Экспорт заявок.\nВыберите этап.",
         reply_markup=_stage_keyboard("cab:export_stage").as_markup(),
         thread_id=callback.message.message_thread_id,
     )
@@ -351,7 +351,7 @@ async def cab_export_menu(callback: CallbackQuery, sender: TelegramSafeSender, t
 async def cab_export_period(callback: CallbackQuery, sender: TelegramSafeSender, tenant=None):
     ctx = await resolve_admin_context(callback, tenant, sender)
     if not ctx:
-        await sender.answer(callback, "в›”пёЏ РќРµС‚ РґРѕСЃС‚СѓРїР°.", show_alert=True)
+        await sender.answer(callback, "⛔️ Нет доступа.", show_alert=True)
         return
     await sender.answer(callback)
     parsed = safe_parse(callback.data, expected_parts=3, expected_types=(str, str, str))
@@ -361,7 +361,7 @@ async def cab_export_period(callback: CallbackQuery, sender: TelegramSafeSender,
     await sender.edit_message_text(
         chat_id=callback.message.chat.id,
         message_id=callback.message.message_id,
-        text="рџ“… <b>Р’С‹Р±РµСЂРёС‚Рµ РїРµСЂРёРѕРґ.</b>",
+        text="📅 <b>Выберите период.</b>",
         reply_markup=_period_keyboard(f"cab:export_do:{stage}").as_markup(),
         parse_mode="HTML",
         thread_id=callback.message.message_thread_id,
@@ -372,7 +372,7 @@ async def cab_export_period(callback: CallbackQuery, sender: TelegramSafeSender,
 async def cab_export_do(callback: CallbackQuery, sender: TelegramSafeSender, tenant=None):
     ctx = await resolve_admin_context(callback, tenant, sender)
     if not ctx:
-        await sender.answer(callback, "в›”пёЏ РќРµС‚ РґРѕСЃС‚СѓРїР°.", show_alert=True)
+        await sender.answer(callback, "⛔️ Нет доступа.", show_alert=True)
         return
     if tenant is None:
         await sender.answer(callback, "No tenant context.", show_alert=True)
@@ -388,7 +388,7 @@ async def cab_export_do(callback: CallbackQuery, sender: TelegramSafeSender, ten
     try:
         status = LeadStatus(stage)
     except ValueError:
-        await sender.answer(callback, "вљ пёЏ РќРµРєРѕСЂСЂРµРєС‚РЅС‹Р№ СЌС‚Р°Рї.", show_alert=True)
+        await sender.answer(callback, "⚠️ Некорректный этап.", show_alert=True)
         return
 
     async with AsyncSessionLocal() as session:
@@ -405,7 +405,7 @@ async def cab_export_do(callback: CallbackQuery, sender: TelegramSafeSender, ten
         await sender.send_ephemeral_text(
             chat_id=callback.message.chat.id,
             message_thread_id=callback.message.message_thread_id,
-            text="в„№пёЏ РќРµС‚ Р·Р°СЏРІРѕРє РїРѕ РІС‹Р±СЂР°РЅРЅРѕРјСѓ С„РёР»СЊС‚СЂСѓ.",
+            text="ℹ️ Нет заявок по выбранному фильтру.",
             ttl_sec=TTL_MENU_SEC,
         )
         await ensure_cabinet_message(sender, callback.message.chat.id)
@@ -417,7 +417,7 @@ async def cab_export_do(callback: CallbackQuery, sender: TelegramSafeSender, ten
         chat_id=callback.message.chat.id,
         message_thread_id=callback.message.message_thread_id,
         document=BufferedInputFile(workbook_bytes, filename=filename),
-        caption=f"рџ“¤ Р­РєСЃРїРѕСЂС‚: {total} Р·Р°СЏРІРѕРє.\nР¤Р°Р№Р»: {filename}",
+        caption=f"📤 Экспорт: {total} заявок.\nФайл: {filename}",
         parse_mode=None,
         ttl_sec=TTL_MENU_SEC,
     )
@@ -428,19 +428,19 @@ async def cab_export_do(callback: CallbackQuery, sender: TelegramSafeSender, ten
 async def cab_analytics(callback: CallbackQuery, sender: TelegramSafeSender, tenant=None):
     ctx = await resolve_admin_context(callback, tenant, sender)
     if not ctx:
-        await sender.answer(callback, "в›”пёЏ РќРµС‚ РґРѕСЃС‚СѓРїР°.", show_alert=True)
+        await sender.answer(callback, "⛔️ Нет доступа.", show_alert=True)
         return
     await sender.answer(callback)
     builder = InlineKeyboardBuilder()
     builder.row(
-        InlineKeyboardButton(text="рџ“€ РљРѕРЅРІРµСЂСЃРёСЏ", callback_data="cab:analytics:conversion"),
-        InlineKeyboardButton(text="рџ‘Ґ Р Р°Р±РѕС‚Р° СЃ Р·Р°СЏРІРєР°РјРё", callback_data="cab:analytics:activity"),
+        InlineKeyboardButton(text="📈 Конверсия", callback_data="cab:analytics:conversion"),
+        InlineKeyboardButton(text="👥 Работа с заявками", callback_data="cab:analytics:activity"),
     )
-    builder.row(InlineKeyboardButton(text="в¬…пёЏ РќР°Р·Р°Рґ", callback_data="cab:back"))
+    builder.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="cab:back"))
     await sender.edit_message_text(
         chat_id=callback.message.chat.id,
         message_id=callback.message.message_id,
-        text="рџ“Љ <b>РђРЅР°Р»РёС‚РёРєР°</b>\nР’С‹Р±РµСЂРёС‚Рµ СЂРµР¶РёРј:",
+        text="📊 <b>Аналитика</b>\nВыберите режим:",
         reply_markup=builder.as_markup(),
         parse_mode="HTML",
         thread_id=callback.message.message_thread_id,
@@ -451,13 +451,13 @@ async def cab_analytics(callback: CallbackQuery, sender: TelegramSafeSender, ten
 async def cab_analytics_conversion(callback: CallbackQuery, sender: TelegramSafeSender, tenant=None):
     ctx = await resolve_admin_context(callback, tenant, sender)
     if not ctx:
-        await sender.answer(callback, "в›”пёЏ РќРµС‚ РґРѕСЃС‚СѓРїР°.", show_alert=True)
+        await sender.answer(callback, "⛔️ Нет доступа.", show_alert=True)
         return
     await sender.answer(callback)
     await sender.edit_message_text(
         chat_id=callback.message.chat.id,
         message_id=callback.message.message_id,
-        text="рџ“€ <b>РљРѕРЅРІРµСЂСЃРёСЏ</b>\nР’С‹Р±РµСЂРёС‚Рµ РїРµСЂРёРѕРґ:",
+        text="📈 <b>Конверсия</b>\nВыберите период:",
         reply_markup=_period_keyboard("cab:analytics_conversion").as_markup(),
         parse_mode="HTML",
         thread_id=callback.message.message_thread_id,
@@ -468,7 +468,7 @@ async def cab_analytics_conversion(callback: CallbackQuery, sender: TelegramSafe
 async def cab_analytics_conversion_period(callback: CallbackQuery, sender: TelegramSafeSender, tenant=None):
     ctx = await resolve_admin_context(callback, tenant, sender)
     if not ctx:
-        await sender.answer(callback, "в›”пёЏ РќРµС‚ РґРѕСЃС‚СѓРїР°.", show_alert=True)
+        await sender.answer(callback, "⛔️ Нет доступа.", show_alert=True)
         return
     if tenant is None:
         await sender.answer(callback, "No tenant context.", show_alert=True)
@@ -488,12 +488,12 @@ async def cab_analytics_conversion_period(callback: CallbackQuery, sender: Teleg
     s = stats["by_status"]
     total = stats["total"]
     lines = [
-        "рџ“€ <b>РљРѕРЅРІРµСЂСЃРёСЏ</b>",
-        f"Р—Р° РїРµСЂРёРѕРґ СЃ {date_from:%d.%m.%y} - {date_to:%d.%m.%y}",
-        f"Р’СЃРµРіРѕ Р»РёРґРѕРІ: {total}",
-        f"Р’Р·СЏС‚Рѕ РІ СЂР°Р±РѕС‚Сѓ: {s.get('in_progress', 0)} ({_pct(s.get('in_progress', 0), total)})",
+        "📈 <b>Конверсия</b>",
+        f"За период с {date_from:%d.%m.%y} - {date_to:%d.%m.%y}",
+        f"Всего лидов: {total}",
+        f"Взято в работу: {s.get('in_progress', 0)} ({_pct(s.get('in_progress', 0), total)})",
         f"РћРїР»Р°С‡РµРЅРѕ: {s.get('paid', 0)} ({_pct(s.get('paid', 0), total)})",
-        f"РЈСЃРїРµС…: {s.get('success', 0)} ({_pct(s.get('success', 0), total)})",
+        f"Успех: {s.get('success', 0)} ({_pct(s.get('success', 0), total)})",
         f"РћС‚РєР»РѕРЅРµРЅРѕ: {s.get('rejected', 0)} ({_pct(s.get('rejected', 0), total)})",
     ]
 
@@ -511,13 +511,13 @@ async def cab_analytics_conversion_period(callback: CallbackQuery, sender: Teleg
 async def cab_analytics_activity(callback: CallbackQuery, sender: TelegramSafeSender, tenant=None):
     ctx = await resolve_admin_context(callback, tenant, sender)
     if not ctx:
-        await sender.answer(callback, "в›”пёЏ РќРµС‚ РґРѕСЃС‚СѓРїР°.", show_alert=True)
+        await sender.answer(callback, "⛔️ Нет доступа.", show_alert=True)
         return
     await sender.answer(callback)
     await sender.edit_message_text(
         chat_id=callback.message.chat.id,
         message_id=callback.message.message_id,
-        text="рџ‘Ґ <b>Р Р°Р±РѕС‚Р° СЃ Р·Р°СЏРІРєР°РјРё</b>\nР’С‹Р±РµСЂРёС‚Рµ РїРµСЂРёРѕРґ:",
+        text="👥 <b>Работа с заявками</b>\nВыберите период:",
         reply_markup=_period_keyboard("cab:analytics_activity").as_markup(),
         parse_mode="HTML",
         thread_id=callback.message.message_thread_id,
@@ -528,7 +528,7 @@ async def cab_analytics_activity(callback: CallbackQuery, sender: TelegramSafeSe
 async def cab_analytics_activity_period(callback: CallbackQuery, sender: TelegramSafeSender, tenant=None):
     ctx = await resolve_admin_context(callback, tenant, sender)
     if not ctx:
-        await sender.answer(callback, "в›”пёЏ РќРµС‚ РґРѕСЃС‚СѓРїР°.", show_alert=True)
+        await sender.answer(callback, "⛔️ Нет доступа.", show_alert=True)
         return
     await sender.answer(callback)
     parsed = safe_parse(callback.data, expected_parts=3, expected_types=(str, str, str))
@@ -540,7 +540,7 @@ async def cab_analytics_activity_period(callback: CallbackQuery, sender: Telegra
         managers = await repo.get_all_managers(tenant_id=tenant.id)
 
     builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text="Р’СЃРµ", callback_data=f"cab:analytics_activity_run:{period}:all"))
+    builder.row(InlineKeyboardButton(text="Все", callback_data=f"cab:analytics_activity_run:{period}:all"))
     for manager in managers:
         builder.row(
             InlineKeyboardButton(
@@ -548,11 +548,11 @@ async def cab_analytics_activity_period(callback: CallbackQuery, sender: Telegra
                 callback_data=f"cab:analytics_activity_run:{period}:{manager.id}",
             )
         )
-    builder.row(InlineKeyboardButton(text="в¬…пёЏ РќР°Р·Р°Рґ", callback_data="cab:back"))
+    builder.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="cab:back"))
     await sender.edit_text(
         chat_id=callback.message.chat.id,
         message_id=callback.message.message_id,
-        text="в„№пёЏ Р’С‹Р±РµСЂРёС‚Рµ СЃРѕС‚СЂСѓРґРЅРёРєР°:",
+        text="ℹ️ Выберите сотрудника:",
         reply_markup=builder.as_markup(),
         parse_mode="HTML",
         thread_id=callback.message.message_thread_id,
@@ -563,7 +563,7 @@ async def cab_analytics_activity_period(callback: CallbackQuery, sender: Telegra
 async def cab_analytics_activity_run(callback: CallbackQuery, sender: TelegramSafeSender, tenant=None):
     ctx = await resolve_admin_context(callback, tenant, sender)
     if not ctx:
-        await sender.answer(callback, "в›”пёЏ РќРµС‚ РґРѕСЃС‚СѓРїР°.", show_alert=True)
+        await sender.answer(callback, "⛔️ Нет доступа.", show_alert=True)
         return
     if tenant is None:
         await sender.answer(callback, "No tenant context.", show_alert=True)
@@ -590,12 +590,12 @@ async def cab_analytics_activity_run(callback: CallbackQuery, sender: TelegramSa
     total = stats["total"]
     s = stats["by_status"]
     lines = [
-        "рџ‘Ґ <b>Р Р°Р±РѕС‚Р° СЃ Р·Р°СЏРІРєР°РјРё</b>",
-        f"Р—Р° РїРµСЂРёРѕРґ СЃ {date_from:%d.%m.%y} - {date_to:%d.%m.%y}",
-        f"Р’СЃРµРіРѕ Р»РёРґРѕРІ: {total}",
-        f"Р’Р·СЏС‚Рѕ РІ СЂР°Р±РѕС‚Сѓ: {s.get('in_progress', 0)} ({_pct(s.get('in_progress', 0), total)})",
+        "👥 <b>Работа с заявками</b>",
+        f"За период с {date_from:%d.%m.%y} - {date_to:%d.%m.%y}",
+        f"Всего лидов: {total}",
+        f"Взято в работу: {s.get('in_progress', 0)} ({_pct(s.get('in_progress', 0), total)})",
         f"РћРїР»Р°С‡РµРЅРѕ: {s.get('paid', 0)} ({_pct(s.get('paid', 0), total)})",
-        f"РЈСЃРїРµС…: {s.get('success', 0)} ({_pct(s.get('success', 0), total)})",
+        f"Успех: {s.get('success', 0)} ({_pct(s.get('success', 0), total)})",
         f"РћС‚РєР»РѕРЅРµРЅРѕ: {s.get('rejected', 0)} ({_pct(s.get('rejected', 0), total)})",
     ]
 
@@ -619,7 +619,7 @@ def _pct(part: int, total: int) -> str:
 async def cab_integrations(callback: CallbackQuery, sender: TelegramSafeSender, tenant=None):
     ctx = await resolve_admin_context(callback, tenant, sender)
     if not ctx:
-        await sender.answer(callback, "в›”пёЏ РќРµС‚ РґРѕСЃС‚СѓРїР°.", show_alert=True)
+        await sender.answer(callback, "⛔️ Нет доступа.", show_alert=True)
         return
     await sender.answer(callback)
 
@@ -631,15 +631,15 @@ async def cab_integrations(callback: CallbackQuery, sender: TelegramSafeSender, 
     masked_key = f"{api_key[:8]}...{api_key[-4:]}" if api_key else "-"
     escaped_key = html_escape(masked_key)
     text = (
-        "рџ”— <b>Webhook РґР»СЏ Tilda</b>\n"
+        "🔗 <b>Webhook для Tilda</b>\n"
         f"POST {escaped_url}\n"
         f"X-API-Key: {escaped_key}\n"
         "⚠️ Не вставляйте API-ключ в браузерный JS.\n"
-        "рџ“‹ Ниже отправлен безопасный proxy-сниппет (без секрета в браузере)."
+        "📋 Ниже отправлен безопасный proxy-сниппет (без секрета в браузере)."
     )
     builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text="рџ“‹ РЎРєРѕРїРёСЂРѕРІР°С‚СЊ СЃСЃС‹Р»РєСѓ", callback_data="cab:copy_webhook"))
-    builder.row(InlineKeyboardButton(text="в¬…пёЏ РќР°Р·Р°Рґ", callback_data="cab:back"))
+    builder.row(InlineKeyboardButton(text="📋 Скопировать ссылку", callback_data="cab:copy_webhook"))
+    builder.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="cab:back"))
     await sender.edit_message_text(
         chat_id=callback.message.chat.id,
         message_id=callback.message.message_id,
@@ -662,7 +662,7 @@ async def cab_integrations(callback: CallbackQuery, sender: TelegramSafeSender, 
         await sender.send_ephemeral_text(
             chat_id=callback.message.chat.id,
             message_thread_id=callback.message.message_thread_id,
-            text="в›”пёЏ РќРµ СѓРґР°Р»РѕСЃСЊ РѕС‚РїСЂР°РІРёС‚СЊ С„Р°Р№Р» JS-СЃРЅРёРїРїРµС‚Р°. РџСЂРѕРІРµСЂСЊС‚Рµ integrations/tilda_snippet.js.",
+            text="⛔️ Не удалось отправить файл JS-сниппета. Проверьте integrations/tilda_snippet.js.",
             ttl_sec=TTL_ERROR_SEC,
         )
 
@@ -689,16 +689,15 @@ async def cab_copy_webhook(callback: CallbackQuery, sender: TelegramSafeSender, 
 async def cab_tariff(callback: CallbackQuery, sender: TelegramSafeSender, tenant=None):
     ctx = await resolve_admin_context(callback, tenant, sender)
     if not ctx:
-        await sender.answer(callback, "в›”пёЏ РќРµС‚ РґРѕСЃС‚СѓРїР°.", show_alert=True)
+        await sender.answer(callback, "⛔️ Нет доступа.", show_alert=True)
         return
     await sender.answer(callback)
     await sender.edit_text(
         chat_id=callback.message.chat.id,
         message_id=callback.message.message_id,
-        text="рџ’і РўРµРєСѓС‰РёР№ С‚Р°СЂРёС„: StartupImpuls\nР—Р°СЏРІРѕРє РІ РјРµСЃСЏС†: Р±РµР· РѕРіСЂР°РЅРёС‡РµРЅРёР№\nРџРѕРґРґРµСЂР¶РєР°: @StartupImpuls",
+        text="💳 Текущий тариф: StartupImpuls\nЗаявок в месяц: без ограничений\nПоддержка: @StartupImpuls",
         reply_markup=InlineKeyboardBuilder().row(
-            InlineKeyboardButton(text="в¬…пёЏ РќР°Р·Р°Рґ", callback_data="cab:back")
+            InlineKeyboardButton(text="⬅️ Назад", callback_data="cab:back")
         ).as_markup(),
         thread_id=callback.message.message_thread_id,
     )
-

@@ -12,7 +12,7 @@ from app.db.utils import _naive
 
 
 def _generate_referral_code() -> str:
-    """Р вЂњР ВµР Р…Р ВµРЎР‚Р С‘РЎР‚РЎС“Р ВµРЎвЂљ Р С”Р С•РЎР‚Р С•РЎвЂљР С”Р С‘Р в„– РЎвЂЎР С‘РЎвЂљР В°Р ВµР СРЎвЂ№Р в„– РЎР‚Р ВµРЎвЂћР ВµРЎР‚Р В°Р В»РЎРЉР Р…РЎвЂ№Р в„– Р С”Р С•Р Т‘: 8 РЎРѓР С‘Р СР Р†Р С•Р В»Р С•Р Р† A-Z0-9."""
+    """Генерирует короткий читаемый реферальный код: 8 символов A-Z0-9."""
     alphabet = string.ascii_uppercase + string.digits
     return "".join(secrets.choice(alphabet) for _ in range(8))
 
@@ -28,7 +28,7 @@ class TenantRepository:
         return result.scalar_one_or_none()
 
     async def bind_group(self, tenant_id: int, group_id: int) -> None:
-        """Р СџРЎР‚Р С‘Р Р†РЎРЏР В·Р В°РЎвЂљРЎРЉ Р С–РЎР‚РЎС“Р С—Р С—РЎС“ Р С” РЎвЂљР ВµР Р…Р В°Р Р…РЎвЂљРЎС“. Р вЂ™РЎвЂ№Р В·РЎвЂ№Р Р†Р В°Р ВµРЎвЂљРЎРѓРЎРЏ Р С—РЎР‚Р С‘ /setup."""
+        """Привязать группу к тенанту. Вызывается при /setup."""
         await self.session.execute(
             update(Tenant).where(Tenant.id == tenant_id).values(
                 group_id=group_id
@@ -36,7 +36,7 @@ class TenantRepository:
         )
 
     async def complete_onboarding(self, tenant_id: int) -> None:
-        """Р С›РЎвЂљР СР ВµРЎвЂљР С‘РЎвЂљРЎРЉ РЎвЂЎРЎвЂљР С• /setup Р Р†РЎвЂ№Р С—Р С•Р В»Р Р…Р ВµР Р… РЎС“РЎРѓР С—Р ВµРЎв‚¬Р Р…Р С•."""
+        """Отметить что /setup выполнен успешно."""
         await self.session.execute(
             update(Tenant).where(Tenant.id == tenant_id).values(
                 onboarding_completed=True
@@ -51,7 +51,7 @@ class TenantRepository:
         sla_new_hours: int | None = None,
         sla_in_progress_days: int | None = None,
     ) -> None:
-        """Р Р€РЎРѓРЎвЂљР В°Р Р…Р С•Р Р†Р С‘РЎвЂљРЎРЉ Р В»Р С‘Р СР С‘РЎвЂљРЎвЂ№ Р С—РЎР‚Р С‘ РЎРѓР СР ВµР Р…Р Вµ РЎвЂљР В°РЎР‚Р С‘РЎвЂћР В°."""
+        """Установить лимиты при смене тарифа."""
         values = {
             "max_leads_per_month": max_leads,
             "max_managers": max_managers,
@@ -315,7 +315,7 @@ class TenantRepository:
         return await self.get_by_owner(owner_tg_id)
 
     async def _ensure_api_key(self, tenant_id: int) -> str:
-        """Р вЂњР ВµР Р…Р ВµРЎР‚Р С‘РЎР‚РЎС“Р ВµРЎвЂљ API Р С”Р В»РЎР‹РЎвЂЎ Р ВµРЎРѓР В»Р С‘ Р ВµР С–Р С• Р ВµРЎвЂ°РЎвЂ Р Р…Р ВµРЎвЂљ. Р вЂ™Р С•Р В·Р Р†РЎР‚Р В°РЎвЂ°Р В°Р ВµРЎвЂљ Р С”Р В»РЎР‹РЎвЂЎ."""
+        """Генерирует API ключ если его ещё нет. Возвращает ключ."""
         tenant = await self.get_by_id(tenant_id)
         if tenant.api_key:
             return tenant.api_key
@@ -405,7 +405,7 @@ class TenantRepository:
         return bool(tenant_used)
 
     async def activate_subscription(self, tenant_id: int, days: int = 30) -> tuple[datetime, str]:
-        """Р СџРЎР‚Р С•Р Т‘Р В»Р ВµР Р†Р В°Р ВµРЎвЂљ Р С—Р С•Р Т‘Р С—Р С‘РЎРѓР С”РЎС“. Р вЂ™Р С•Р В·Р Р†РЎР‚Р В°РЎвЂ°Р В°Р ВµРЎвЂљ (Р Р…Р С•Р Р†Р В°РЎРЏ_Р Т‘Р В°РЎвЂљР В°, api_key)."""
+        """Продлевает подписку. Возвращает (новая_дата, api_key)."""
         tenant = await self.get_by_id(tenant_id)
         now = datetime.now(timezone.utc)
         base = max(tenant.subscription_until or now, now)
@@ -473,7 +473,7 @@ class TenantRepository:
         return list(result.scalars().all())
 
     async def get_referral_stats(self, tenant_id: int) -> dict:
-        """Р РЋРЎвЂљР В°РЎвЂљР С‘РЎРѓРЎвЂљР С‘Р С”Р В° РЎР‚Р ВµРЎвЂћР ВµРЎР‚Р В°Р В»Р С•Р Р† Р Т‘Р В»РЎРЏ Р Т‘Р В°Р Р…Р Р…Р С•Р С–Р С• РЎвЂљР ВµР Р…Р В°Р Р…РЎвЂљР В°."""
+        """Статистика рефералов для данного тенанта."""
         result = await self.session.execute(
             select(Tenant).where(Tenant.referred_by_id == tenant_id)
         )

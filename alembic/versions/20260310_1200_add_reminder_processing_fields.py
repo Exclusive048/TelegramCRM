@@ -1,4 +1,4 @@
-﻿"""add reminder processing fields
+"""add reminder processing fields
 
 Revision ID: 1f4b9c2d7a11
 Revises: ef72cd854497
