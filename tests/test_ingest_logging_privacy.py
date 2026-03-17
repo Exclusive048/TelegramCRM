@@ -50,7 +50,10 @@ def test_ingest_logging_keeps_technical_context_events() -> None:
 
     assert "tilda_payload_parsed" in tilda_block
     assert "payload_key_count" in tilda_block
-    assert "payload_keys" in tilda_block
+    assert "known_key_count" in tilda_block
+    assert "unknown_key_count" in tilda_block
+    assert "contains_unexpected_keys" in tilda_block
+    assert "known_key_flags" in tilda_block
 
 
 def test_ingest_error_paths_have_safe_logging_events() -> None:
@@ -63,13 +66,23 @@ def test_ingest_error_paths_have_safe_logging_events() -> None:
     assert "ingest_payload_parse_error" in tilda_block
 
 
-def test_payload_shape_logger_uses_keys_not_values() -> None:
+def test_payload_shape_logger_uses_allowlist_metadata_only() -> None:
     source = LEADS_PATH.read_text(encoding="utf-8")
     block = _function_block(source, "_payload_shape")
 
     assert ".values(" not in block
-    assert "payload_keys" in block
-    assert "contains_sensitive_keys" in block
+    assert "payload_keys" not in block
+    assert "known_key_count" in block
+    assert "unknown_key_count" in block
+    assert "contains_unexpected_keys" in block
+    assert "known_key_flags" in block
+    assert "has_sensitive_known_keys" in block
+
+
+def test_ingest_logging_no_arbitrary_input_key_names() -> None:
+    source = LEADS_PATH.read_text(encoding="utf-8")
+    assert "payload_keys" not in source
+    assert "payload_keys_truncated" not in source
 
 
 def test_auth_denied_logs_do_not_include_api_key_values() -> None:

@@ -29,7 +29,6 @@ from app.services.lead_service import LeadService
 
 router = APIRouter(prefix="/leads", tags=["Leads"])
 MAX_EXTRA_KEYS = 20
-MAX_LOGGED_PAYLOAD_KEYS = 25
 _SENSITIVE_LOG_FIELDS = {
     "name",
     "phone",
@@ -54,6 +53,66 @@ _SKIP_EXTRA = {
     "COOKIES", "$$_headers",
     "assent",
 }
+_CREATE_LEAD_KNOWN_KEYS = frozenset(
+    {
+        "name",
+        "phone",
+        "email",
+        "source",
+        "comment",
+        "service",
+        "amount",
+        "utm_campaign",
+        "utm_source",
+        "manager_id",
+        "extra",
+    }
+)
+_CREATE_LEAD_SHAPE_FLAG_KEYS = (
+    "name",
+    "phone",
+    "email",
+    "source",
+    "comment",
+    "service",
+    "utm_campaign",
+    "utm_source",
+    "extra",
+)
+_TILDA_KNOWN_INPUT_KEYS = frozenset(
+    {key.lower() for key in _SKIP_EXTRA}
+    | {
+        "firstname",
+        "lastname",
+        "first_name",
+        "last_name",
+        "fio",
+        "fullname",
+        "messenger-id",
+        "messenger_id",
+        "messenger-type",
+        "messenger_type",
+        "city",
+        "country",
+        "location",
+        "time",
+        "messages",
+        "telephone",
+        "tel",
+    }
+)
+_TILDA_SHAPE_FLAG_KEYS = (
+    "name",
+    "phone",
+    "email",
+    "comment",
+    "service",
+    "program",
+    "utm_campaign",
+    "utm_source",
+    "utm_medium",
+    "messenger-id",
+)
 
 
 def _request_id(request: Request) -> str:
@@ -61,15 +120,27 @@ def _request_id(request: Request) -> str:
     return str(request_id or "n/a")
 
 
-def _payload_shape(payload: dict[str, Any]) -> dict[str, Any]:
-    keys = sorted({str(key).strip()[:64] for key in payload if str(key).strip()})
-    normalized_lower = {key.lower() for key in keys}
-    sensitive_keys = sorted(normalized_lower.intersection(_SENSITIVE_LOG_FIELDS))
+def _payload_shape(
+    payload: dict[str, Any],
+    *,
+    known_keys: set[str] | frozenset[str],
+    flag_keys: tuple[str, ...],
+) -> dict[str, Any]:
+    normalized_keys = {
+        str(key).strip().lower()[:64] for key in payload if str(key).strip()
+    }
+    known_present = normalized_keys.intersection(known_keys)
+    unknown_key_count = len(normalized_keys - known_keys)
+    sensitive_known_keys = known_present.intersection(_SENSITIVE_LOG_FIELDS)
+    known_key_flags = {f"has_{key}": key in known_present for key in flag_keys}
     return {
-        "payload_key_count": len(keys),
-        "payload_keys": keys[:MAX_LOGGED_PAYLOAD_KEYS],
-        "payload_keys_truncated": len(keys) > MAX_LOGGED_PAYLOAD_KEYS,
-        "contains_sensitive_keys": sensitive_keys,
+        "payload_key_count": len(normalized_keys),
+        "known_key_count": len(known_present),
+        "unknown_key_count": unknown_key_count,
+        "contains_unexpected_keys": unknown_key_count > 0,
+        "known_key_flags": known_key_flags,
+        "sensitive_known_key_count": len(sensitive_known_keys),
+        "has_sensitive_known_keys": bool(sensitive_known_keys),
     }
 
 
@@ -258,16 +329,22 @@ async def create_lead(
     tenant_id = tenant.id if tenant else None
     payload = body.model_dump(exclude_none=True)
     source = str(payload.get("source") or "api")
-    payload_shape = _payload_shape(payload)
+    payload_shape = _payload_shape(
+        payload,
+        known_keys=_CREATE_LEAD_KNOWN_KEYS,
+        flag_keys=_CREATE_LEAD_SHAPE_FLAG_KEYS,
+    )
     logger.info(
-        "ingest_request_received request_id={} tenant_id={} endpoint={} source={} payload_key_count={} payload_keys={} payload_keys_truncated={}",
+        "ingest_request_received request_id={} tenant_id={} endpoint={} source={} payload_key_count={} known_key_count={} unknown_key_count={} contains_unexpected_keys={} known_key_flags={}",
         request_id,
         tenant_id,
         "/api/v1/leads",
         source,
         payload_shape["payload_key_count"],
-        payload_shape["payload_keys"],
-        payload_shape["payload_keys_truncated"],
+        payload_shape["known_key_count"],
+        payload_shape["unknown_key_count"],
+        payload_shape["contains_unexpected_keys"],
+        payload_shape["known_key_flags"],
     )
     if tenant and not tenant.group_id:
         logger.warning(
@@ -338,22 +415,28 @@ async def tilda_webhook(
         form = await request.form()
         data = dict(form)
 
-    payload_shape = _payload_shape(data)
+    payload_shape = _payload_shape(
+        data,
+        known_keys=_TILDA_KNOWN_INPUT_KEYS,
+        flag_keys=_TILDA_SHAPE_FLAG_KEYS,
+    )
     logger.info(
-        "ingest_request_received request_id={} tenant_id={} endpoint={} source={} payload_key_count={} payload_keys={} payload_keys_truncated={}",
+        "ingest_request_received request_id={} tenant_id={} endpoint={} source={} payload_key_count={} known_key_count={} unknown_key_count={} contains_unexpected_keys={} known_key_flags={}",
         request_id,
         tenant_id,
         endpoint,
         source,
         payload_shape["payload_key_count"],
-        payload_shape["payload_keys"],
-        payload_shape["payload_keys_truncated"],
+        payload_shape["known_key_count"],
+        payload_shape["unknown_key_count"],
+        payload_shape["contains_unexpected_keys"],
+        payload_shape["known_key_flags"],
     )
 
     lead_data = _parse_tilda(data)
     lead_flags = _safe_lead_flags(lead_data)
     logger.info(
-        "tilda_payload_parsed request_id={} tenant_id={} endpoint={} source={} has_name={} has_phone={} has_email={} has_comment={} has_service={} extra_key_count={} contains_sensitive_keys={}",
+        "tilda_payload_parsed request_id={} tenant_id={} endpoint={} source={} has_name={} has_phone={} has_email={} has_comment={} has_service={} extra_key_count={} unknown_key_count={} contains_unexpected_keys={} has_sensitive_known_keys={} sensitive_known_key_count={}",
         request_id,
         tenant_id,
         endpoint,
@@ -364,7 +447,10 @@ async def tilda_webhook(
         lead_flags["has_comment"],
         lead_flags["has_service"],
         lead_flags["extra_key_count"],
-        payload_shape["contains_sensitive_keys"],
+        payload_shape["unknown_key_count"],
+        payload_shape["contains_unexpected_keys"],
+        payload_shape["has_sensitive_known_keys"],
+        payload_shape["sensitive_known_key_count"],
     )
 
     lead = await _create_lead_atomic(
