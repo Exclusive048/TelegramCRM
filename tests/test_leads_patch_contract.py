@@ -38,6 +38,18 @@ def _request(*, tenant_id: int = 77, group_id: int = -100500) -> Request:
     return request
 
 
+class _FakeDbSession:
+    def __init__(self) -> None:
+        self.commit_calls = 0
+        self.rollback_calls = 0
+
+    async def commit(self) -> None:
+        self.commit_calls += 1
+
+    async def rollback(self) -> None:
+        self.rollback_calls += 1
+
+
 def test_lead_patch_schema_is_status_only_and_forbids_extra_fields() -> None:
     assert set(LeadUpdateRequest.model_fields.keys()) == {
         "status",
@@ -125,16 +137,20 @@ def test_update_lead_returns_409_for_unsupported_status_transition(monkeypatch) 
             calls["method"] = "reject_lead"
             return {"id": lead_id}
 
+        async def sync_lead_after_transition(self, lead_id: int, transition: str):
+            return None
+
     monkeypatch.setattr(leads, "LeadRepository", _FakeRepo)
     monkeypatch.setattr(leads, "LeadService", _FakeService)
 
     body = LeadUpdateRequest(status=LeadStatus.NEW)
+    db = _FakeDbSession()
     response = asyncio.run(
         leads.update_lead(
             lead_id=1,
             body=body,
             request=_request(),
-            db=object(),
+            db=db,
             _=None,
             sender=object(),
         )
@@ -179,8 +195,14 @@ def test_update_lead_runs_status_flow_for_supported_transition(monkeypatch) -> N
         async def reject_lead(self, lead_id, manager_tg_id, reason, source_ref):
             return None
 
+        async def sync_lead_after_transition(self, lead_id: int, transition: str):
+            captured["sync_lead_id"] = lead_id
+            captured["sync_transition"] = transition
+            return None
+
     monkeypatch.setattr(leads, "LeadRepository", _FakeRepo)
     monkeypatch.setattr(leads, "LeadService", _FakeService)
+    db = _FakeDbSession()
 
     body = LeadUpdateRequest(status=LeadStatus.PAID, manager_tg_id=12345, amount=999.0)
     response = asyncio.run(
@@ -188,7 +210,7 @@ def test_update_lead_runs_status_flow_for_supported_transition(monkeypatch) -> N
             lead_id=1,
             body=body,
             request=_request(tenant_id=88, group_id=-100700),
-            db=object(),
+            db=db,
             _=None,
             sender=object(),
         )
@@ -201,3 +223,6 @@ def test_update_lead_runs_status_flow_for_supported_transition(monkeypatch) -> N
     assert captured["manager_tg_id"] == 12345
     assert captured["amount"] == 999.0
     assert captured["source_ref"] is None
+    assert captured["sync_lead_id"] == 1
+    assert captured["sync_transition"] == "paid"
+    assert db.commit_calls == 2

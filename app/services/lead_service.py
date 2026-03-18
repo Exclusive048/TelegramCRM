@@ -101,12 +101,11 @@ class LeadService:
 
         lead = await self.repo.try_take_lead(lead_id, manager.id if manager else None)
         logger.info(
-            f"lead_action=take lead_id={lead_id} source_ref={source_ref} db_result={bool(lead)}"
+            f"lead_action=take lead_id={lead_id} db_result={bool(lead)}"
         )
         if not lead:
             return None
 
-        await self._move_card(lead=lead, source_ref=source_ref, action="take")
         return lead
 
     async def mark_paid(
@@ -134,12 +133,11 @@ class LeadService:
             enforce_manager=enforce_manager,
         )
         logger.info(
-            f"lead_action=paid lead_id={lead_id} source_ref={source_ref} db_result={bool(lead)}"
+            f"lead_action=paid lead_id={lead_id} db_result={bool(lead)}"
         )
         if not lead:
             return None
 
-        await self._move_card(lead=lead, source_ref=source_ref, action="paid")
         return lead
 
     async def mark_success(
@@ -165,12 +163,11 @@ class LeadService:
             enforce_manager=enforce_manager,
         )
         logger.info(
-            f"lead_action=success lead_id={lead_id} source_ref={source_ref} db_result={bool(lead)}"
+            f"lead_action=success lead_id={lead_id} db_result={bool(lead)}"
         )
         if not lead:
             return None
 
-        await self._move_card(lead=lead, source_ref=source_ref, action="success")
         return lead
 
     async def reject_lead(
@@ -198,12 +195,11 @@ class LeadService:
             enforce_manager=enforce_manager,
         )
         logger.info(
-            f"lead_action=reject lead_id={lead_id} source_ref={source_ref} db_result={bool(lead)}"
+            f"lead_action=reject lead_id={lead_id} db_result={bool(lead)}"
         )
         if not lead:
             return None
 
-        await self._move_card(lead=lead, source_ref=source_ref, action="reject")
         return lead
 
     async def clone_lead(self, lead_id: int) -> Lead | None:
@@ -226,27 +222,33 @@ class LeadService:
         }
         clone = await self.repo.create(data)
         logger.info(f"lead_action=clone source_id={lead_id} clone_id={clone.id}")
-        topic_id = None
-        if self.group_id:
-            topic_id = await resolve_topic_thread_id(
-                self.group_id,
-                TopicKey.NEW,
-                self.repo.session,
-                sender=self.sender,
-                thread_id=None,
-            )
-        ref = await self._post_card(clone, topic_id=topic_id) if topic_id else None
-        if ref:
-            await self.repo.set_active_card_message(
-                lead_id=clone.id,
-                chat_id=ref.chat_id,
-                topic_id=ref.topic_id,
-                message_id=ref.message_id,
-            )
-            logger.info(f"lead_post lead_id={clone.id} ref={ref} ok=True")
-        else:
-            logger.warning(f"lead_post lead_id={clone.id} ok=False")
         return clone
+
+    async def sync_lead_after_transition(self, lead_id: int, transition: str) -> int | None:
+        """
+        Post-commit side-effects for lead status transitions.
+        Must be called only after successful commit of DB transition.
+        """
+        tenant_id = self._tenant_scope(action="sync_lead_after_transition")
+        if tenant_id is None:
+            return None
+
+        lead = await self.repo.get_by_id_scoped(lead_id, tenant_id=tenant_id)
+        if not lead:
+            return None
+
+        if transition in {"take", "paid", "success", "reject"}:
+            await self._move_card(lead=lead, action=transition)
+            active = await self.repo.get_active_card_message(lead.id)
+            return active.message_id if active else None
+
+        if transition in {"clone", "create"}:
+            return await self.sync_new_lead_card(lead.id)
+
+        logger.warning(
+            f"lead_transition_post_commit_skipped lead_id={lead_id} transition={transition} reason=unsupported_transition"
+        )
+        return None
 
     async def add_comment(
         self,
@@ -416,7 +418,6 @@ class LeadService:
     async def _move_card(
         self,
         lead: Lead,
-        source_ref: MessageRef | None,
         *,
         action: str,
     ):
@@ -433,11 +434,31 @@ class LeadService:
                 f"lead_move skipped lead_id={lead_full.id} action={action} reason=topic_missing"
             )
             return
-        archive_text = format_archive_card(lead_full)
-        old_active = await self.repo.get_active_card_message(lead_full.id)
 
-        if source_ref is None:
-            source_ref = await self._resolve_active_ref(lead_full)
+        current_active = await self.repo.get_active_card_message(lead_full.id)
+        if (
+            current_active
+            and current_active.topic_id == target_topic
+            and current_active.chat_id == self.group_id
+        ):
+            if (
+                lead_full.tg_message_id != current_active.message_id
+                or lead_full.tg_topic_id != current_active.topic_id
+            ):
+                await self.repo.set_tg_message(
+                    lead_full.id,
+                    current_active.message_id,
+                    current_active.topic_id,
+                )
+            logger.info(
+                f"lead_move skipped lead_id={lead_full.id} action={action} reason=already_in_target_topic"
+            )
+            return
+
+        archive_text = format_archive_card(lead_full)
+        old_active = current_active
+
+        source_ref = await self._resolve_active_ref(lead_full)
 
         archived_ok = False
         if source_ref:

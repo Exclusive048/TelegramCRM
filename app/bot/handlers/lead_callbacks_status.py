@@ -29,6 +29,33 @@ from .lead_callbacks_shared import (
 router = Router()
 
 
+async def _run_post_commit_sync(
+    *,
+    session,
+    service: LeadService,
+    lead_id: int,
+    tenant_id: int | None,
+    transition: str,
+) -> None:
+    try:
+        logger.info(
+            "lead_transition_post_commit_started lead_id={} tenant_id={} transition={} origin=bot_callback",
+            lead_id,
+            tenant_id,
+            transition,
+        )
+        await service.sync_lead_after_transition(lead_id, transition)
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        logger.exception(
+            "lead_transition_post_commit_failed lead_id={} tenant_id={} transition={} origin=bot_callback",
+            lead_id,
+            tenant_id,
+            transition,
+        )
+
+
 @router.callback_query(F.data.regexp(r"^lead:(take|paid|success|reject|reject_reason|clone):"))
 async def handle_lead_status_action(
     callback: CallbackQuery,
@@ -66,19 +93,26 @@ async def handle_lead_status_action(
             lead = await service.take_in_progress(lead_id, callback.from_user.id, source_ref)
             if lead:
                 await session.commit()
-                await sender.answer(callback, "✅ Заявка взята в работу.")
+                await _run_post_commit_sync(
+                    session=session,
+                    service=service,
+                    lead_id=lead.id,
+                    tenant_id=tenant_id,
+                    transition="take",
+                )
+                await sender.answer(callback, "\u2705 \u0417\u0430\u044f\u0432\u043a\u0430 \u0432\u0437\u044f\u0442\u0430 \u0432 \u0440\u0430\u0431\u043e\u0442\u0443.")
                 return
 
             existing = await repo.get_by_id(lead_id, tenant_id=tenant_id)
             if existing and existing.status != LeadStatus.NEW:
-                other_name = existing.manager.name if existing.manager else "другой менеджер"
+                other_name = existing.manager.name if existing.manager else "\u0434\u0440\u0443\u0433\u043e\u0439 \u043c\u0435\u043d\u0435\u0434\u0436\u0435\u0440"
                 if existing.manager and existing.manager.tg_id == callback.from_user.id:
-                    await sender.answer(callback, "⚠️ Вы уже взяли эту заявку.", show_alert=True)
+                    await sender.answer(callback, "\u26a0\ufe0f \u0412\u044b \u0443\u0436\u0435 \u0432\u0437\u044f\u043b\u0438 \u044d\u0442\u0443 \u0437\u0430\u044f\u0432\u043a\u0443.", show_alert=True)
                 else:
-                    await sender.answer(callback, f"⚠️ Уже взято: {other_name}.", show_alert=True)
+                    await sender.answer(callback, f"\u26a0\ufe0f \u0423\u0436\u0435 \u0432\u0437\u044f\u0442\u043e: {other_name}.", show_alert=True)
                 return
 
-            await sender.answer(callback, "⚠️ Уже взято другим менеджером.", show_alert=True)
+            await sender.answer(callback, "\u26a0\ufe0f \u0423\u0436\u0435 \u0432\u0437\u044f\u0442\u043e \u0434\u0440\u0443\u0433\u0438\u043c \u043c\u0435\u043d\u0435\u0434\u0436\u0435\u0440\u043e\u043c.", show_alert=True)
             return
 
         if action == "paid":
@@ -93,7 +127,7 @@ async def handle_lead_status_action(
                 callback,
                 state,
                 sender,
-                "ℹ️ Введите сумму сделки (руб.):",
+                "\u2139\ufe0f \u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0441\u0443\u043c\u043c\u0443 \u0441\u0434\u0435\u043b\u043a\u0438 (\u0440\u0443\u0431.):",
                 lead_id=lead_id,
             )
             return
@@ -106,9 +140,16 @@ async def handle_lead_status_action(
             lead = await service.mark_success(lead_id, callback.from_user.id, source_ref)
             if lead:
                 await session.commit()
-                await sender.answer(callback, "✅ Сделка успешно завершена.")
+                await _run_post_commit_sync(
+                    session=session,
+                    service=service,
+                    lead_id=lead.id,
+                    tenant_id=tenant_id,
+                    transition="success",
+                )
+                await sender.answer(callback, "\u2705 \u0421\u0434\u0435\u043b\u043a\u0430 \u0443\u0441\u043f\u0435\u0448\u043d\u043e \u0437\u0430\u0432\u0435\u0440\u0448\u0435\u043d\u0430.")
                 return
-            await sender.answer(callback, "⚠️ Не удалось завершить сделку.", show_alert=True)
+            await sender.answer(callback, "\u26a0\ufe0f \u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0437\u0430\u0432\u0435\u0440\u0448\u0438\u0442\u044c \u0441\u0434\u0435\u043b\u043a\u0443.", show_alert=True)
             return
 
         if action == "reject":
@@ -122,7 +163,7 @@ async def handle_lead_status_action(
             await sender.send_ephemeral_text(
                 chat_id=callback.message.chat.id,
                 message_thread_id=callback.message.message_thread_id,
-                text="ℹ️ Укажите причину отказа:",
+                text="\u2139\ufe0f \u0423\u043a\u0430\u0436\u0438\u0442\u0435 \u043f\u0440\u0438\u0447\u0438\u043d\u0443 \u043e\u0442\u043a\u0430\u0437\u0430:",
                 reply_markup=make_reject_reason_keyboard(lead_id),
                 ttl_sec=TTL_MENU_SEC,
             )
@@ -147,7 +188,7 @@ async def handle_lead_status_action(
                     callback,
                     state,
                     sender,
-                    "ℹ️ Введите свою причину отказа:",
+                    "\u2139\ufe0f \u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0441\u0432\u043e\u044e \u043f\u0440\u0438\u0447\u0438\u043d\u0443 \u043e\u0442\u043a\u0430\u0437\u0430:",
                     lead_id=lead_id,
                 )
                 return
@@ -165,11 +206,18 @@ async def handle_lead_status_action(
             )
             if lead:
                 await session.commit()
+                await _run_post_commit_sync(
+                    session=session,
+                    service=service,
+                    lead_id=lead.id,
+                    tenant_id=tenant_id,
+                    transition="reject",
+                )
                 await state.clear()
-                await sender.answer(callback, "✅ Готово.")
+                await sender.answer(callback, "\u2705 \u0413\u043e\u0442\u043e\u0432\u043e.")
                 await cleanup_inline_menu(callback, sender)
                 return
-            await sender.answer(callback, "⚠️ Не удалось отклонить заявку.", show_alert=True)
+            await sender.answer(callback, "\u26a0\ufe0f \u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043e\u0442\u043a\u043b\u043e\u043d\u0438\u0442\u044c \u0437\u0430\u044f\u0432\u043a\u0443.", show_alert=True)
             return
 
         if action == "clone":
@@ -180,9 +228,16 @@ async def handle_lead_status_action(
             clone = await service.clone_lead(lead_id)
             if clone:
                 await session.commit()
-                await sender.answer(callback, "✅ Копия создана.")
+                await _run_post_commit_sync(
+                    session=session,
+                    service=service,
+                    lead_id=clone.id,
+                    tenant_id=tenant_id,
+                    transition="clone",
+                )
+                await sender.answer(callback, "\u2705 \u041a\u043e\u043f\u0438\u044f \u0441\u043e\u0437\u0434\u0430\u043d\u0430.")
                 return
-            await sender.answer(callback, "⚠️ Не удалось создать копию.", show_alert=True)
+            await sender.answer(callback, "\u26a0\ufe0f \u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0441\u043e\u0437\u0434\u0430\u0442\u044c \u043a\u043e\u043f\u0438\u044e.", show_alert=True)
             return
 
     logger.warning(f"Unhandled lead action: {action} for lead_id={lead_id}")

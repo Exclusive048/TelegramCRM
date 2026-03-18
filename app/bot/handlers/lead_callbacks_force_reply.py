@@ -3,6 +3,7 @@ from __future__ import annotations
 from aiogram import Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
+from loguru import logger
 
 from app.bot.constants.ttl import TTL_ERROR_SEC
 from app.bot.ui.message_ref import MessageRef
@@ -23,6 +24,33 @@ from .lead_callbacks_shared import (
 )
 
 router = Router()
+
+
+async def _run_post_commit_sync(
+    *,
+    session,
+    service: LeadService,
+    lead_id: int,
+    tenant_id: int | None,
+    transition: str,
+) -> None:
+    try:
+        logger.info(
+            "lead_transition_post_commit_started lead_id={} tenant_id={} transition={} origin=bot_force_reply",
+            lead_id,
+            tenant_id,
+            transition,
+        )
+        await service.sync_lead_after_transition(lead_id, transition)
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        logger.exception(
+            "lead_transition_post_commit_failed lead_id={} tenant_id={} transition={} origin=bot_force_reply",
+            lead_id,
+            tenant_id,
+            transition,
+        )
 
 
 @router.message(AmountState.waiting_for_amount)
@@ -50,7 +78,7 @@ async def handle_amount_input(
         await sender.send_ephemeral_text(
             chat_id=message.chat.id,
             message_thread_id=message.message_thread_id,
-            text="⛔️ Введите корректную сумму (число больше 0).",
+            text="\u26d4\ufe0f \u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u043a\u043e\u0440\u0440\u0435\u043a\u0442\u043d\u0443\u044e \u0441\u0443\u043c\u043c\u0443 (\u0447\u0438\u0441\u043b\u043e \u0431\u043e\u043b\u044c\u0448\u0435 0).",
             ttl_sec=TTL_ERROR_SEC,
         )
         return
@@ -86,11 +114,18 @@ async def handle_amount_input(
         lead = await service.mark_paid(int(lead_id), message.from_user.id, amount, target_ref)
         if lead:
             await session.commit()
+            await _run_post_commit_sync(
+                session=session,
+                service=service,
+                lead_id=lead.id,
+                tenant_id=tenant_id,
+                transition="paid",
+            )
         else:
             await sender.send_ephemeral_text(
                 chat_id=message.chat.id,
                 message_thread_id=message.message_thread_id,
-                text="⚠️ Не удалось перевести заявку в «Оплачено».",
+                text="\u26a0\ufe0f \u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043f\u0435\u0440\u0435\u0432\u0435\u0441\u0442\u0438 \u0437\u0430\u044f\u0432\u043a\u0443 \u0432 \u00ab\u041e\u043f\u043b\u0430\u0447\u0435\u043d\u043e\u00bb.",
                 ttl_sec=TTL_ERROR_SEC,
             )
 
@@ -123,7 +158,7 @@ async def handle_custom_reject(
         await sender.send_ephemeral_text(
             chat_id=message.chat.id,
             message_thread_id=message.message_thread_id,
-            text="⛔️ Введите причину отказа.",
+            text="\u26d4\ufe0f \u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u043f\u0440\u0438\u0447\u0438\u043d\u0443 \u043e\u0442\u043a\u0430\u0437\u0430.",
             ttl_sec=TTL_ERROR_SEC,
         )
         return
@@ -159,11 +194,18 @@ async def handle_custom_reject(
         lead = await service.reject_lead(int(lead_id), message.from_user.id, reason=reason, source_ref=target_ref)
         if lead:
             await session.commit()
+            await _run_post_commit_sync(
+                session=session,
+                service=service,
+                lead_id=lead.id,
+                tenant_id=tenant_id,
+                transition="reject",
+            )
         else:
             await sender.send_ephemeral_text(
                 chat_id=message.chat.id,
                 message_thread_id=message.message_thread_id,
-                text="⚠️ Не удалось отклонить заявку.",
+                text="\u26a0\ufe0f \u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043e\u0442\u043a\u043b\u043e\u043d\u0438\u0442\u044c \u0437\u0430\u044f\u0432\u043a\u0443.",
                 ttl_sec=TTL_ERROR_SEC,
             )
 

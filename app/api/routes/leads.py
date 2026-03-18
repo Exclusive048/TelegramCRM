@@ -343,7 +343,7 @@ async def _create_lead_atomic(
                     lead.id,
                 )
     return lead
-# в”Ђв”Ђ POST /leads в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+
 
 @router.post("", response_model=CreateLeadResponse, status_code=201)
 @limiter.limit("60/minute")
@@ -579,16 +579,46 @@ async def update_lead(
     service = LeadService(repo, sender, group_id=group_id, tenant_id=tenant_id)
     manager_tg_id = body.manager_tg_id or 0
     result = None
+    transition_name = ""
     if body.status == LeadStatus.IN_PROGRESS:
+        transition_name = "take"
         result = await service.take_in_progress(lead_id, manager_tg_id, None)
     elif body.status == LeadStatus.PAID:
+        transition_name = "paid"
         result = await service.mark_paid(lead_id, manager_tg_id, body.amount, None)
     elif body.status == LeadStatus.SUCCESS:
+        transition_name = "success"
         result = await service.mark_success(lead_id, manager_tg_id, None)
     elif body.status == LeadStatus.REJECTED:
+        transition_name = "reject"
         result = await service.reject_lead(lead_id, manager_tg_id, body.reject_reason or "", None)
     if not result:
         return JSONResponse(status_code=409, content={"error": "invalid_transition"})
+
+    result_lead_id = getattr(result, "id", None)
+    if result_lead_id is None and isinstance(result, dict):
+        result_lead_id = result.get("id")
+    if result_lead_id is None:
+        result_lead_id = lead_id
+
+    await db.commit()
+    try:
+        logger.info(
+            "lead_transition_post_commit_started lead_id={} tenant_id={} transition={} origin=api_patch",
+            result_lead_id,
+            tenant_id,
+            transition_name,
+        )
+        await service.sync_lead_after_transition(result_lead_id, transition_name)
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        logger.exception(
+            "lead_transition_post_commit_failed lead_id={} tenant_id={} transition={} origin=api_patch",
+            result_lead_id,
+            tenant_id,
+            transition_name,
+        )
 
     return OkResponse()
 
