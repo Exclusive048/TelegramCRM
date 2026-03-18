@@ -27,7 +27,6 @@ class RegState(StatesGroup):
 
 
 # ── Вспомогательные функции ────────────────────────────────────────────────────
-logger.debug(f"[MASTER] handle_company_name CALLED ...")
 def _status_line(tenant: Tenant) -> str:
     icon = "✅" if tenant.is_active else "🔴"
     until = ""
