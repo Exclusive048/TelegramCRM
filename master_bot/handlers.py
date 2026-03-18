@@ -27,7 +27,7 @@ class RegState(StatesGroup):
 
 
 # ── Вспомогательные функции ────────────────────────────────────────────────────
-
+logger.debug(f"[MASTER] handle_company_name CALLED ...")
 def _status_line(tenant: Tenant) -> str:
     icon = "✅" if tenant.is_active else "🔴"
     until = ""
@@ -49,8 +49,7 @@ def _tenant_detail_text(tenant: Tenant) -> str:
         days_left_str = f" (осталось {delta} дн.)" if delta >= 0 else " (истекла)"
     plan_map = {
         "trial": "Пробный",
-        "base": "Базовый 990 руб/мес",
-        "pro": "Про 2490 руб/мес",
+        "base": "Базовый 1500 руб/мес",
     }
     plan = plan_map.get(tenant.plan, tenant.plan or "вЂ”")
     onboarding = "✅ Настроена" if tenant.onboarding_completed else "⚠️ Ожидает /setup"
@@ -94,8 +93,6 @@ def _account_keyboard(tenant: Tenant) -> InlineKeyboardBuilder:
     return b
 
 
-# в”Ђв”Ђ /start в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
-
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext, command: CommandObject):
     logger.debug(f"[MASTER] cmd_start from={message.from_user.id} chat_type={message.chat.type}")
@@ -132,7 +129,6 @@ async def cmd_start(message: Message, state: FSMContext, command: CommandObject)
 
 
 # ── Ввод названия компании ─────────────────────────────────────────────────────
-
 @router.message(RegState.waiting_for_name)
 async def handle_company_name(message: Message, state: FSMContext):
     logger.debug(f"[MASTER] handle_company_name CALLED from={message.from_user.id} text={message.text!r}")
