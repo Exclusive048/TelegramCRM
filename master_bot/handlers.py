@@ -296,7 +296,7 @@ async def cb_reg_trial(callback: CallbackQuery):
     await _send_activation_message(callback.message, tenant, api_key)
 
 
-# в”Ђв”Ђ РћРїР»Р°С‚Р° в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+# ?? ?????? ?????????????????????????????????????????????????????????????????????
 
 async def _process_payment(callback: CallbackQuery) -> None:
     parsed = safe_parse(callback.data, expected_parts=3, expected_types=(str, str, int))
@@ -490,7 +490,7 @@ async def cb_acc_ref(callback: CallbackQuery):
         f"<code>{ref_link}</code>\n\n"
         f"📊 <b>Статистика:</b>\n"
         f"Приглашено: {stats['total']}\n"
-        f"РћРїР»Р°С‚РёР»Рё: {stats['paid']}\n"
+        f"\u041e\u043f\u043b\u0430\u0442\u0438\u043b\u0438: {stats['paid']}\n"
         f"Бонус получено: {stats['bonus_days_earned']} дней\n\n"
         "Поделитесь ссылкой — бонус начисляется автоматически при оплате друга.",
         reply_markup=builder.as_markup(),
@@ -580,5 +580,4 @@ async def _send_activation_message(
             f"и напишите /setup — это займёт 1 минуту.",
             parse_mode="HTML",
         )
-
 

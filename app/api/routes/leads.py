@@ -183,7 +183,7 @@ def _parse_tilda(data: dict) -> dict:
     if not name:
         name = _pick(data, "formname", "program", default="Заявка с сайта")
 
-    # в”Ђв”Ђ РўРµР»РµС„РѕРЅ / РєРѕРЅС‚Р°РєС‚ в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+    # ??????? / ???????
     phone = _pick(data, "Phone", "phone", "PHONE", "tel", "Tel", "telephone")
     if not phone:
         messenger_id = _pick(data, "messenger-id", "messenger_id")
@@ -213,9 +213,9 @@ def _parse_tilda(data: dict) -> dict:
 
     # Добавляем гео/время если есть
     for field, label in [
-        ("city", "Р“РѕСЂРѕРґ"),
-        ("City", "Р“РѕСЂРѕРґ"),
-        ("country", "РЎС‚СЂР°РЅР°"),
+        ("city", "\u0413\u043e\u0440\u043e\u0434"),
+        ("City", "\u0413\u043e\u0440\u043e\u0434"),
+        ("country", "\u0421\u0442\u0440\u0430\u043d\u0430"),
         ("location", "Локация"),
         ("time", "Время"),
     ]:
@@ -648,4 +648,3 @@ async def add_comment(
         target_ref=None,
     )
     return OkResponse()
-

@@ -209,15 +209,15 @@ def _main_keyboard() -> InlineKeyboardBuilder:
 def _stage_keyboard(prefix: str) -> InlineKeyboardBuilder:
     builder = InlineKeyboardBuilder()
     builder.row(
-        InlineKeyboardButton(text="Р›РёРґС‹", callback_data=f"{prefix}:new"),
-        InlineKeyboardButton(text="Р’ СЂР°Р±РѕС‚Рµ", callback_data=f"{prefix}:in_progress"),
+        InlineKeyboardButton(text="\u041b\u0438\u0434\u044b", callback_data=f"{prefix}:new"),
+        InlineKeyboardButton(text="\u0412 \u0440\u0430\u0431\u043e\u0442\u0435", callback_data=f"{prefix}:in_progress"),
     )
     builder.row(
-        InlineKeyboardButton(text="РћРїР»Р°С‡РµРЅРѕ", callback_data=f"{prefix}:paid"),
+        InlineKeyboardButton(text="\u041e\u043f\u043b\u0430\u0447\u0435\u043d\u043e", callback_data=f"{prefix}:paid"),
         InlineKeyboardButton(text="Успех", callback_data=f"{prefix}:success"),
     )
     builder.row(
-        InlineKeyboardButton(text="РћС‚РєР»РѕРЅРµРЅРѕ", callback_data=f"{prefix}:rejected"),
+        InlineKeyboardButton(text="\u041e\u0442\u043a\u043b\u043e\u043d\u0435\u043d\u043e", callback_data=f"{prefix}:rejected"),
     )
     builder.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="cab:back"))
     return builder
@@ -262,11 +262,11 @@ def build_workbook(leads) -> bytes:
         cell.alignment = Alignment(horizontal="center")
 
     status_labels = {
-        "new": "Р›РёРґ",
-        "in_progress": "Р’ СЂР°Р±РѕС‚Рµ",
-        "paid": "РћРїР»Р°С‡РµРЅРѕ",
+        "new": "\u041b\u0438\u0434",
+        "in_progress": "\u0412 \u0440\u0430\u0431\u043e\u0442\u0435",
+        "paid": "\u041e\u043f\u043b\u0430\u0447\u0435\u043d\u043e",
         "success": "Успех",
-        "rejected": "РћС‚РєР»РѕРЅРµРЅРѕ",
+        "rejected": "\u041e\u0442\u043a\u043b\u043e\u043d\u0435\u043d\u043e",
     }
 
     for row, lead in enumerate(leads, 2):
@@ -492,9 +492,9 @@ async def cab_analytics_conversion_period(callback: CallbackQuery, sender: Teleg
         f"За период с {date_from:%d.%m.%y} - {date_to:%d.%m.%y}",
         f"Всего лидов: {total}",
         f"Взято в работу: {s.get('in_progress', 0)} ({_pct(s.get('in_progress', 0), total)})",
-        f"РћРїР»Р°С‡РµРЅРѕ: {s.get('paid', 0)} ({_pct(s.get('paid', 0), total)})",
+        f"\u041e\u043f\u043b\u0430\u0447\u0435\u043d\u043e: {s.get('paid', 0)} ({_pct(s.get('paid', 0), total)})",
         f"Успех: {s.get('success', 0)} ({_pct(s.get('success', 0), total)})",
-        f"РћС‚РєР»РѕРЅРµРЅРѕ: {s.get('rejected', 0)} ({_pct(s.get('rejected', 0), total)})",
+        f"\u041e\u0442\u043a\u043b\u043e\u043d\u0435\u043d\u043e: {s.get('rejected', 0)} ({_pct(s.get('rejected', 0), total)})",
     ]
 
     await sender.send_ephemeral_text(
@@ -594,9 +594,9 @@ async def cab_analytics_activity_run(callback: CallbackQuery, sender: TelegramSa
         f"За период с {date_from:%d.%m.%y} - {date_to:%d.%m.%y}",
         f"Всего лидов: {total}",
         f"Взято в работу: {s.get('in_progress', 0)} ({_pct(s.get('in_progress', 0), total)})",
-        f"РћРїР»Р°С‡РµРЅРѕ: {s.get('paid', 0)} ({_pct(s.get('paid', 0), total)})",
+        f"\u041e\u043f\u043b\u0430\u0447\u0435\u043d\u043e: {s.get('paid', 0)} ({_pct(s.get('paid', 0), total)})",
         f"Успех: {s.get('success', 0)} ({_pct(s.get('success', 0), total)})",
-        f"РћС‚РєР»РѕРЅРµРЅРѕ: {s.get('rejected', 0)} ({_pct(s.get('rejected', 0), total)})",
+        f"\u041e\u0442\u043a\u043b\u043e\u043d\u0435\u043d\u043e: {s.get('rejected', 0)} ({_pct(s.get('rejected', 0), total)})",
     ]
 
     await sender.send_ephemeral_text(
