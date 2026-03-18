@@ -109,6 +109,7 @@ async def _ensure_owner_registered(
 async def cmd_start(message: Message, state: FSMContext, sender: TelegramSafeSender):
     """Регистрация нового тенанта или приветствие существующего."""
     if message.chat.type == "private":
+        log_guard_rejected("crm_start_private_chat", flow="onboarding")
         await message.answer("ℹ️ Добавьте бота в вашу Telegram-группу как администратора.")
         return
 
@@ -135,14 +136,17 @@ async def cmd_start(message: Message, state: FSMContext, sender: TelegramSafeSen
             return
 
     if message.from_user is None:
+        log_guard_rejected("crm_start_missing_user", flow="onboarding")
         return
 
     try:
         member = await message.bot.get_chat_member(message.chat.id, message.from_user.id)
         if member.status not in ("creator", "administrator"):
+            log_guard_rejected("crm_start_group_admin_required", flow="onboarding")
             await message.answer("⛔️ Только администратор группы может зарегистрировать CRM.")
             return
     except Exception:
+        log_guard_rejected("crm_start_admin_check_failed", flow="onboarding")
         return
 
     await state.set_state(TenantRegistrationState.waiting_for_company_name)
