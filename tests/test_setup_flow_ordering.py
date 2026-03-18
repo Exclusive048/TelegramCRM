@@ -12,33 +12,29 @@ def _cmd_setup_block(source: str) -> str:
     return match.group(0)
 
 
-def test_setup_binds_tenant_only_after_guards_and_success_path() -> None:
+def _cb_setup_select_block(source: str) -> str:
+    match = re.search(r"async def cb_setup_select_tenant\(.*?(?=\n\n@router\.message|\Z)", source, flags=re.S)
+    if not match:
+        raise AssertionError("cb_setup_select_tenant block not found")
+    return match.group(0)
+
+
+def test_setup_command_routes_through_common_execution_path() -> None:
     source = SETUP_PATH.read_text(encoding="utf-8")
     block = _cmd_setup_block(source)
 
-    bind_idx = block.find("bind_group(")
-    assert bind_idx != -1
-
-    required_before_bind = [
-        "if not await is_tg_admin",
-        "if not getattr(chat, \"is_forum\", False)",
-        "_select_setup_tenant(",
-        "if not target_tenant:",
-        "if not errors:",
-    ]
-    for token in required_before_bind:
-        token_idx = block.find(token)
-        assert token_idx != -1
-        assert token_idx < bind_idx
+    assert "_ensure_setup_prerequisites(" in block
+    assert "_select_setup_tenant(" in block
+    assert "_run_setup_for_tenant(" in block
+    assert "_build_setup_selection_markup(" in block
+    assert '"tg_setup_selection_shown"' in block
 
 
-def test_setup_keeps_bind_in_success_and_should_bind_branch() -> None:
+def test_setup_selection_callback_rechecks_guards_and_uses_common_execution_path() -> None:
     source = SETUP_PATH.read_text(encoding="utf-8")
-    block = _cmd_setup_block(source)
+    block = _cb_setup_select_block(source)
 
-    assert "if errors and should_bind_tenant:" in block
-    assert re.search(
-        r"if not errors:\s+.*if should_bind_tenant:\s+.*await repo\.bind_group",
-        block,
-        flags=re.S,
-    )
+    assert "_ensure_setup_prerequisites(" in block
+    assert "tenant.owner_tg_id != from_user.id" in block
+    assert "tenant.group_id != 0" in block
+    assert "_run_setup_for_tenant(" in block

@@ -8,7 +8,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from loguru import logger
 
 from app.bot.constants.ttl import TTL_ERROR_SEC, TTL_MENU_SEC
-from app.bot.diagnostics import log_guard_rejected
+from app.bot.diagnostics import emit_tg_event, log_guard_rejected
 from app.bot.handlers.panel import ensure_panel_message
 from app.bot.topic_cache import invalidate as invalidate_topic_cache
 from app.bot.topic_resolver import resolve_topic_thread_id
@@ -25,6 +25,7 @@ from app.services.yukassa_service import _create_yukassa_payment
 from app.telegram.safe_sender import TelegramSafeSender
 
 router = Router(name="crm.setup")
+SETUP_SELECT_CALLBACK_PREFIX = "setup:select"
 
 
 class TenantRegistrationState(StatesGroup):
@@ -82,6 +83,249 @@ def _select_setup_tenant(tenants: list[Tenant], chat_id: int) -> tuple[Tenant | 
         return None, "ambiguous_unbound"
 
     return None, "not_found"
+
+
+def _get_unbound_tenants(tenants: list[Tenant]) -> list[Tenant]:
+    return [tenant for tenant in tenants if tenant.group_id == 0]
+
+
+def _tenant_button_text(tenant: Tenant) -> str:
+    title = (tenant.company_name or "").strip() or f"Tenant #{tenant.id}"
+    title = " ".join(title.split())
+    if len(title) > 42:
+        title = f"{title[:41]}…"
+    return f"🏢 {title}"
+
+
+def _build_setup_selection_markup(unbound_tenants: list[Tenant]):
+    builder = InlineKeyboardBuilder()
+    for tenant in unbound_tenants:
+        builder.row(
+            InlineKeyboardButton(
+                text=_tenant_button_text(tenant),
+                callback_data=f"{SETUP_SELECT_CALLBACK_PREFIX}:{tenant.id}",
+            )
+        )
+    return builder.as_markup()
+
+
+async def _ensure_setup_prerequisites(
+    sender: TelegramSafeSender,
+    *,
+    chat_id: int,
+    message_thread_id: int | None,
+    user_id: int,
+    source: str,
+) -> bool:
+    if not await is_tg_admin(sender, chat_id, user_id):
+        log_guard_rejected(
+            "setup_group_admin_required",
+            flow="onboarding",
+            source=source,
+            chat_id=chat_id,
+            user_id=user_id,
+        )
+        await sender.send_ephemeral_text(
+            chat_id=chat_id,
+            message_thread_id=message_thread_id,
+            text="⛔️ Только администратор группы может выполнять /setup.",
+            ttl_sec=TTL_ERROR_SEC,
+        )
+        return False
+
+    chat = await sender.get_chat(chat_id)
+    if not getattr(chat, "is_forum", False):
+        log_guard_rejected(
+            "setup_forum_required",
+            flow="onboarding",
+            source=source,
+            chat_id=chat_id,
+            user_id=user_id,
+        )
+        await sender.send_ephemeral_text(
+            chat_id=chat_id,
+            message_thread_id=message_thread_id,
+            text="⛔️ Включите в группе темы (форум), чтобы настроить CRM.",
+            ttl_sec=TTL_ERROR_SEC,
+        )
+        return False
+
+    return True
+
+
+async def _run_setup_for_tenant(
+    *,
+    sender: TelegramSafeSender,
+    chat_id: int,
+    message_thread_id: int | None,
+    actor_user,
+    target_tenant: Tenant,
+    should_bind_tenant: bool,
+    source: str,
+    cleanup_message_id: int | None = None,
+) -> None:
+    member = await sender.get_chat_member(chat_id, actor_user.id)
+    if isinstance(member, ChatMemberOwner):
+        await _ensure_owner_registered(
+            actor_user.id,
+            actor_user.full_name,
+            actor_user.username,
+            tenant_id=target_tenant.id,
+        )
+
+    emit_tg_event(
+        "tg_setup_execution_started",
+        source=source,
+        chat_id=chat_id,
+        user_id=actor_user.id,
+        tenant_id=target_tenant.id,
+        should_bind_tenant=should_bind_tenant,
+    )
+
+    progress = await sender.send_ephemeral_text(
+        chat_id=chat_id,
+        message_thread_id=message_thread_id,
+        text="⚙️ Настраиваю топики...",
+        ttl_sec=TTL_MENU_SEC,
+    )
+
+    created: list[tuple[str, str, int]] = []
+    errors: list[tuple[str, str]] = []
+    existing_map: dict[str, int] = {}
+
+    async with AsyncSessionLocal() as session:
+        repo = TenantTopicRepository(session)
+        existing_map = await repo.get_topic_map(chat_id)
+
+        for spec in TOPIC_SPECS:
+            existing_thread = existing_map.get(spec.key.value)
+            if existing_thread:
+                try:
+                    try:
+                        await _probe_topic_thread(sender, chat_id, existing_thread)
+                    except TelegramBadRequest as e:
+                        if "message thread not found" in str(e).lower():
+                            existing_thread = None
+                            existing_map.pop(spec.key.value, None)
+                        else:
+                            raise
+                except Exception as exc:
+                    errors.append((spec.title, str(exc)))
+                    logger.error(f"Failed to validate topic '{spec.title}': {exc}")
+                    continue
+
+            if existing_thread:
+                await repo.upsert_topic(
+                    chat_id=chat_id,
+                    key=spec.key.value,
+                    thread_id=existing_thread,
+                    title=spec.title,
+                )
+                continue
+
+            try:
+                topic = await sender.create_forum_topic(chat_id, spec.title)
+                await repo.upsert_topic(
+                    chat_id=chat_id,
+                    key=spec.key.value,
+                    thread_id=topic.message_thread_id,
+                    title=spec.title,
+                )
+                created.append((spec.title, spec.key.value, topic.message_thread_id))
+                existing_map[spec.key.value] = topic.message_thread_id
+                logger.info(f"Topic created: {spec.title} -> id={topic.message_thread_id}")
+            except Exception as exc:
+                errors.append((spec.title, str(exc)))
+                logger.error(f"Failed to create topic '{spec.title}': {exc}")
+
+        await session.commit()
+
+    invalidate_topic_cache(chat_id)
+
+    topic_managers_id = existing_map.get(TopicKey.MANAGERS.value)
+    if topic_managers_id:
+        try:
+            await ensure_panel_message(sender, chat_id, topic_managers_id)
+            logger.info(f"Panel message ensured in topic {topic_managers_id}")
+        except Exception as exc:
+            errors.append(("Панель управления", str(exc)))
+            logger.error(f"Failed to ensure panel message: {exc}")
+
+    summary_lines = ["✅ Настройка завершена."]
+    if created:
+        summary_lines.append(f"Создано топиков: {len(created)}.")
+    if errors:
+        summary_lines.append("Ошибки:")
+        for name, err in errors:
+            summary_lines.append(f"- {name}: {err}")
+    if errors and should_bind_tenant:
+        summary_lines.append(
+            "⚠️ Привязка tenant к группе не выполнена из-за ошибок setup. Исправьте ошибки и повторите /setup."
+        )
+    summary_lines.append("Готово.")
+
+    await sender.edit_text(
+        chat_id=progress.chat.id,
+        message_id=progress.message_id,
+        text="\n".join(summary_lines),
+        thread_id=progress.message_thread_id,
+    )
+    await sender.schedule_delete(
+        chat_id=progress.chat.id,
+        message_id=progress.message_id,
+        thread_id=progress.message_thread_id,
+        ttl_sec=TTL_MENU_SEC,
+    )
+
+    if cleanup_message_id is not None:
+        try:
+            await sender.delete_message(
+                chat_id=chat_id,
+                message_id=cleanup_message_id,
+                thread_id=message_thread_id,
+            )
+        except Exception:
+            pass
+
+    try:
+        await _ensure_topic_menus(sender, chat_id)
+        logger.info("Topic menus ensured")
+    except Exception as exc:
+        logger.error(f"Failed to ensure topic menus: {exc}")
+
+    if not errors:
+        async with AsyncSessionLocal() as session:
+            from app.db.repositories.tenant_repository import TenantRepository
+
+            repo = TenantRepository(session)
+            if should_bind_tenant:
+                await repo.bind_group(target_tenant.id, chat_id)
+            await repo.complete_onboarding(target_tenant.id)
+            await session.commit()
+
+        if should_bind_tenant:
+            from master_bot.notify import notify_admin
+
+            try:
+                await notify_admin(
+                    "✅ Группа привязана к CRM\n"
+                    f"🏢 {target_tenant.company_name}\n"
+                    f"🆔 group_id: {chat_id}"
+                )
+            except Exception as exc:
+                logger.warning(f"Failed to notify admin after group bind: {exc}")
+
+    emit_tg_event(
+        "tg_setup_execution_completed",
+        source=source,
+        chat_id=chat_id,
+        user_id=actor_user.id,
+        tenant_id=target_tenant.id,
+        should_bind_tenant=should_bind_tenant,
+        errors_count=len(errors),
+        created_topics_count=len(created),
+        outcome="completed_with_errors" if errors else "completed",
+    )
 
 
 async def _ensure_owner_registered(
@@ -338,28 +582,13 @@ async def cmd_setup(message: Message, sender: TelegramSafeSender):
         log_guard_rejected("setup_missing_user", flow="onboarding")
         return
 
-    target_tenant: Tenant | None = None
-    should_bind_tenant = False
-
-    if not await is_tg_admin(sender, chat_id, message.from_user.id):
-        log_guard_rejected("setup_group_admin_required", flow="onboarding", chat_id=chat_id, user_id=message.from_user.id)
-        await sender.send_ephemeral_text(
-            chat_id=chat_id,
-            message_thread_id=message.message_thread_id,
-            text="⛔️ Только администратор группы может выполнять /setup.",
-            ttl_sec=TTL_ERROR_SEC,
-        )
-        return
-
-    chat = await sender.get_chat(chat_id)
-    if not getattr(chat, "is_forum", False):
-        log_guard_rejected("setup_forum_required", flow="onboarding", chat_id=chat_id)
-        await sender.send_ephemeral_text(
-            chat_id=chat_id,
-            message_thread_id=message.message_thread_id,
-            text="⛔️ Включите в группе темы (форум), чтобы настроить CRM.",
-            ttl_sec=TTL_ERROR_SEC,
-        )
+    if not await _ensure_setup_prerequisites(
+        sender,
+        chat_id=chat_id,
+        message_thread_id=message.message_thread_id,
+        user_id=message.from_user.id,
+        source="setup_command",
+    ):
         return
 
     async with AsyncSessionLocal() as session:
@@ -370,15 +599,23 @@ async def cmd_setup(message: Message, sender: TelegramSafeSender):
         target_tenant, selection_error = _select_setup_tenant(tenants, chat_id)
 
     if selection_error == "ambiguous_unbound":
-        log_guard_rejected("setup_ambiguous_unbound", flow="onboarding", chat_id=chat_id)
+        unbound_tenants = _get_unbound_tenants(tenants)
+        emit_tg_event(
+            "tg_setup_selection_shown",
+            chat_id=chat_id,
+            user_id=message.from_user.id,
+            unbound_candidates_count=len(unbound_tenants),
+            candidate_tenant_ids=[tenant.id for tenant in unbound_tenants],
+        )
         await sender.send_ephemeral_text(
             chat_id=chat_id,
             message_thread_id=message.message_thread_id,
             text=(
-                "⚠️ Для вашего Telegram ID найдено несколько незавершённых CRM-аккаунтов. "
-                "Автопривязка отключена: завершите setup через мастер-бота или обратитесь в поддержку."
+                "⚠️ Найдено несколько незавершённых CRM-аккаунтов.\n"
+                "Выберите, какой аккаунт привязать к этой группе:"
             ),
-            ttl_sec=TTL_ERROR_SEC,
+            reply_markup=_build_setup_selection_markup(unbound_tenants),
+            ttl_sec=TTL_MENU_SEC,
         )
         return
 
@@ -408,147 +645,130 @@ async def cmd_setup(message: Message, sender: TelegramSafeSender):
         )
         return
 
-    should_bind_tenant = target_tenant.group_id == 0
-
-    member = await sender.get_chat_member(chat_id, message.from_user.id)
-    if isinstance(member, ChatMemberOwner):
-        await _ensure_owner_registered(
-            message.from_user.id,
-            message.from_user.full_name,
-            message.from_user.username,
-            tenant_id=target_tenant.id,
-        )
-
-    progress = await sender.send_ephemeral_text(
+    await _run_setup_for_tenant(
+        sender=sender,
         chat_id=chat_id,
         message_thread_id=message.message_thread_id,
-        text="⚙️ Настраиваю топики...",
-        ttl_sec=TTL_MENU_SEC,
+        actor_user=message.from_user,
+        target_tenant=target_tenant,
+        should_bind_tenant=target_tenant.group_id == 0,
+        source="setup_command",
+        cleanup_message_id=message.message_id,
     )
 
-    created: list[tuple[str, str, int]] = []
-    errors: list[tuple[str, str]] = []
+
+@router.callback_query(F.data.startswith(f"{SETUP_SELECT_CALLBACK_PREFIX}:"))
+async def cb_setup_select_tenant(callback: CallbackQuery, sender: TelegramSafeSender):
+    parsed = safe_parse(callback.data, expected_parts=3, expected_types=(str, str, int))
+    if not parsed:
+        await callback.answer("⚠️ Некорректный callback.", show_alert=True)
+        return
+    _, action, tenant_id = parsed
+    if action != "select":
+        log_guard_rejected("setup_selection_invalid_action", flow="onboarding")
+        emit_tg_event(
+            "tg_setup_selection_rejected",
+            reason="invalid_action",
+            selected_tenant_id=tenant_id,
+        )
+        await callback.answer("⚠️ Некорректный выбор аккаунта.", show_alert=True)
+        return
+
+    from_user = callback.from_user
+    message = callback.message
+    chat_id = getattr(getattr(message, "chat", None), "id", None)
+    message_thread_id = getattr(message, "message_thread_id", None)
+    message_id = getattr(message, "message_id", None)
+
+    if from_user is None or not isinstance(chat_id, int):
+        log_guard_rejected("setup_selection_missing_context", flow="onboarding")
+        emit_tg_event(
+            "tg_setup_selection_rejected",
+            reason="missing_context",
+            selected_tenant_id=tenant_id,
+        )
+        await callback.answer("⚠️ Выбор устарел. Запустите /setup снова.", show_alert=True)
+        return
+
+    if not await _ensure_setup_prerequisites(
+        sender,
+        chat_id=chat_id,
+        message_thread_id=message_thread_id,
+        user_id=from_user.id,
+        source="setup_selection_callback",
+    ):
+        emit_tg_event(
+            "tg_setup_selection_rejected",
+            reason="prerequisites_failed",
+            selected_tenant_id=tenant_id,
+            chat_id=chat_id,
+            user_id=from_user.id,
+        )
+        await callback.answer("⚠️ Нельзя продолжить setup в текущем чате.", show_alert=True)
+        return
 
     async with AsyncSessionLocal() as session:
-        repo = TenantTopicRepository(session)
-        existing_map = await repo.get_topic_map(chat_id)
+        from app.db.repositories.tenant_repository import TenantRepository
 
-        for spec in TOPIC_SPECS:
-            existing_thread = existing_map.get(spec.key.value)
-            if existing_thread:
-                try:
-                    try:
-                        await _probe_topic_thread(sender, chat_id, existing_thread)
-                    except TelegramBadRequest as e:
-                        if "message thread not found" in str(e).lower():
-                            existing_thread = None
-                            existing_map.pop(spec.key.value, None)
-                        else:
-                            raise
-                except Exception as exc:
-                    errors.append((spec.title, str(exc)))
-                    logger.error(f"Failed to validate topic '{spec.title}': {exc}")
-                    continue
+        repo = TenantRepository(session)
+        tenant = await repo.get_by_id(tenant_id)
 
-            if existing_thread:
-                await repo.upsert_topic(
-                    chat_id=chat_id,
-                    key=spec.key.value,
-                    thread_id=existing_thread,
-                    title=spec.title,
-                )
-                continue
-
-            try:
-                topic = await sender.create_forum_topic(chat_id, spec.title)
-                await repo.upsert_topic(
-                    chat_id=chat_id,
-                    key=spec.key.value,
-                    thread_id=topic.message_thread_id,
-                    title=spec.title,
-                )
-                created.append((spec.title, spec.key.value, topic.message_thread_id))
-                existing_map[spec.key.value] = topic.message_thread_id
-                logger.info(f"Topic created: {spec.title} -> id={topic.message_thread_id}")
-            except Exception as exc:
-                errors.append((spec.title, str(exc)))
-                logger.error(f"Failed to create topic '{spec.title}': {exc}")
-
-        await session.commit()
-
-    invalidate_topic_cache(chat_id)
-
-    topic_managers_id = existing_map.get(TopicKey.MANAGERS.value)
-    if topic_managers_id:
-        try:
-            await ensure_panel_message(sender, chat_id, topic_managers_id)
-            logger.info(f"Panel message ensured in topic {topic_managers_id}")
-        except Exception as exc:
-            errors.append(("Панель управления", str(exc)))
-            logger.error(f"Failed to ensure panel message: {exc}")
-
-    summary_lines = ["✅ Настройка завершена."]
-    if created:
-        summary_lines.append(f"Создано топиков: {len(created)}.")
-    if errors:
-        summary_lines.append("Ошибки:")
-        for name, err in errors:
-            summary_lines.append(f"- {name}: {err}")
-    if errors and should_bind_tenant:
-        summary_lines.append(
-            "⚠️ Привязка tenant к группе не выполнена из-за ошибок setup. Исправьте ошибки и повторите /setup."
-        )
-    summary_lines.append("Готово.")
-
-    await sender.edit_text(
-        chat_id=progress.chat.id,
-        message_id=progress.message_id,
-        text="\n".join(summary_lines),
-        thread_id=progress.message_thread_id,
-    )
-    await sender.schedule_delete(
-        chat_id=progress.chat.id,
-        message_id=progress.message_id,
-        thread_id=progress.message_thread_id,
-        ttl_sec=TTL_MENU_SEC,
-    )
-
-    try:
-        await sender.delete_message(
+    if not tenant or tenant.owner_tg_id != from_user.id:
+        log_guard_rejected(
+            "setup_selection_tenant_owner_mismatch",
+            flow="onboarding",
             chat_id=chat_id,
-            message_id=message.message_id,
-            thread_id=message.message_thread_id,
+            user_id=from_user.id,
+            selected_tenant_id=tenant_id,
         )
-    except Exception:
-        pass
+        emit_tg_event(
+            "tg_setup_selection_rejected",
+            reason="tenant_owner_mismatch",
+            selected_tenant_id=tenant_id,
+            chat_id=chat_id,
+            user_id=from_user.id,
+        )
+        await callback.answer("⛔️ Этот CRM-аккаунт недоступен для выбора.", show_alert=True)
+        return
 
-    try:
-        await _ensure_topic_menus(sender, chat_id)
-        logger.info("Topic menus ensured")
-    except Exception as exc:
-        logger.error(f"Failed to ensure topic menus: {exc}")
+    if tenant.group_id != 0:
+        log_guard_rejected(
+            "setup_selection_tenant_not_unbound",
+            flow="onboarding",
+            chat_id=chat_id,
+            user_id=from_user.id,
+            selected_tenant_id=tenant_id,
+            tenant_group_id=tenant.group_id,
+        )
+        emit_tg_event(
+            "tg_setup_selection_rejected",
+            reason="tenant_not_unbound",
+            selected_tenant_id=tenant_id,
+            chat_id=chat_id,
+            user_id=from_user.id,
+            tenant_group_id=tenant.group_id,
+        )
+        await callback.answer("⚠️ Этот CRM-аккаунт уже привязан. Запустите /setup снова.", show_alert=True)
+        return
 
-    if not errors:
-        async with AsyncSessionLocal() as session:
-            from app.db.repositories.tenant_repository import TenantRepository
+    emit_tg_event(
+        "tg_setup_tenant_selected",
+        chat_id=chat_id,
+        user_id=from_user.id,
+        selected_tenant_id=tenant.id,
+    )
+    await callback.answer("✅ Аккаунт выбран. Продолжаю настройку...")
 
-            repo = TenantRepository(session)
-            if should_bind_tenant:
-                await repo.bind_group(target_tenant.id, chat_id)
-            await repo.complete_onboarding(target_tenant.id)
-            await session.commit()
-
-        if should_bind_tenant:
-            from master_bot.notify import notify_admin
-
-            try:
-                await notify_admin(
-                    "✅ Группа привязана к CRM\n"
-                    f"🏢 {target_tenant.company_name}\n"
-                    f"🆔 group_id: {chat_id}"
-                )
-            except Exception as exc:
-                logger.warning(f"Failed to notify admin after group bind: {exc}")
+    await _run_setup_for_tenant(
+        sender=sender,
+        chat_id=chat_id,
+        message_thread_id=message_thread_id,
+        actor_user=from_user,
+        target_tenant=tenant,
+        should_bind_tenant=True,
+        source="setup_selection_callback",
+        cleanup_message_id=message_id if isinstance(message_id, int) else None,
+    )
 
 @router.message(Command("add_manager"))
 async def cmd_add_manager(message: Message, sender: TelegramSafeSender, tenant=None):
