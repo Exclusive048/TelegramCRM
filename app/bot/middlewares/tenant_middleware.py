@@ -7,8 +7,11 @@ from aiogram import BaseMiddleware
 from aiogram.types import CallbackQuery, Message, TelegramObject
 from loguru import logger
 
+from app.bot.diagnostics import TG_MIDDLEWARE_ENTER, TG_MIDDLEWARE_EXIT, emit_tg_event, log_guard_rejected
 from app.db.database import AsyncSessionLocal
 from app.db.repositories.tenant_repository import TenantRepository
+
+EXCLUDED_COMMANDS = {"/start", "/pay", "/help", "/setup"}
 
 
 class TenantMiddleware(BaseMiddleware):
@@ -18,78 +21,92 @@ class TenantMiddleware(BaseMiddleware):
         event: TelegramObject,
         data: Dict[str, Any],
     ) -> Any:
+        emit_tg_event(TG_MIDDLEWARE_ENTER, middleware="tenant")
 
-        # ── Логируем ВСЕ входящие апдейты ─────────────────────────────────────
-        if isinstance(event, Message):
-            text_type = type(event.text).__name__ if event.text is not None else None
-            text_len = len(event.text) if isinstance(event.text, str) else 0
-            logger.debug(
-                f"[MW] MESSAGE: chat_id={event.chat.id} "
-                f"chat_type={event.chat.type} "
-                f"thread_id={event.message_thread_id} "
-                f"from={event.from_user.id if event.from_user else None} "
-                f"text_type={text_type} "
-                f"text_len={text_len} "
-                f"reply_to={event.reply_to_message.message_id if event.reply_to_message else None}"
-            )
-        elif isinstance(event, CallbackQuery):
-            logger.debug(
-                f"[MW] CALLBACK: data={event.data!r} "
-                f"from={event.from_user.id if event.from_user else None} "
-                f"chat_id={event.message.chat.id if event.message else None}"
-            )
-
-        # ── Исключённые команды — пропускаем без проверки тенанта ─────────────
-        EXCLUDED_COMMANDS = {"/start", "/pay", "/help", "/setup"}
         if isinstance(event, Message) and event.text:
             command = event.text.split()[0]
             if command in EXCLUDED_COMMANDS:
-                logger.debug(f"[MW] excluded command={command}, skip tenant check")
+                emit_tg_event(
+                    TG_MIDDLEWARE_EXIT,
+                    middleware="tenant",
+                    outcome="skipped",
+                    skip_reason="excluded_command",
+                    command=command,
+                )
                 return await handler(event, data)
 
-        # ── Определяем chat_id ─────────────────────────────────────────────────
-        chat_id = None
+        chat_id: int | None = None
         if isinstance(event, Message):
             chat_id = event.chat.id
         elif isinstance(event, CallbackQuery) and event.message:
             chat_id = event.message.chat.id
 
-        # ── Личный чат (chat_id > 0) — пропускаем без проверки тенанта ────────
-        if not chat_id or chat_id > 0:
+        if chat_id is None or chat_id > 0:
+            emit_tg_event(
+                TG_MIDDLEWARE_EXIT,
+                middleware="tenant",
+                outcome="skipped",
+                skip_reason="private_or_missing_chat",
+            )
             return await handler(event, data)
 
-        # ── Групповой чат — проверяем тенанта ─────────────────────────────────
         async with AsyncSessionLocal() as session:
             repo = TenantRepository(session)
             tenant = await repo.get_by_group_id(chat_id)
-
             if not tenant:
-                logger.warning(f"[MW] no tenant for chat_id={chat_id} → DROP")
-                return
+                log_guard_rejected("tenant_not_found", middleware="tenant", chat_id=chat_id)
+                emit_tg_event(
+                    TG_MIDDLEWARE_EXIT,
+                    middleware="tenant",
+                    outcome="rejected",
+                    rejection_reason="tenant_not_found",
+                    chat_id=chat_id,
+                )
+                return None
 
-            logger.debug(f"[MW] tenant found: id={tenant.id} is_active={tenant.is_active}")
-
-            # Авто-деактивация при истечении подписки
             if tenant.is_active and tenant.subscription_until:
                 if tenant.subscription_until < datetime.now(timezone.utc):
                     await repo.deactivate(tenant.id)
                     await session.commit()
                     tenant.is_active = False
-                    logger.info(f"[MW] tenant {tenant.id} auto-deactivated")
+                    logger.info("Tenant {} auto-deactivated by middleware", tenant.id)
 
             if not tenant.is_active:
                 try:
-                    text = "⛔️ Подписка неактивна. Администратору группы нужно выполнить /pay."
+                    text = "⚠️ Подписка неактивна. Администратору группы нужно выполнить /pay."
                     if isinstance(event, Message):
                         await event.answer(text)
                     elif isinstance(event, CallbackQuery):
                         await event.answer(text, show_alert=True)
-                except Exception as e:
-                    logger.warning(f"[MW] failed to notify inactive tenant chat_id={chat_id}: {e}")
-                logger.debug("[MW] tenant inactive → DROP")
-                return
+                except Exception as exc:
+                    logger.warning(
+                        "Inactive tenant notification failed chat_id={} err={}",
+                        chat_id,
+                        exc,
+                    )
+
+                log_guard_rejected(
+                    "tenant_inactive",
+                    middleware="tenant",
+                    tenant_id=tenant.id,
+                    chat_id=chat_id,
+                )
+                emit_tg_event(
+                    TG_MIDDLEWARE_EXIT,
+                    middleware="tenant",
+                    outcome="rejected",
+                    rejection_reason="tenant_inactive",
+                    tenant_id=tenant.id,
+                    chat_id=chat_id,
+                )
+                return None
 
             data["tenant"] = tenant
-            logger.debug("[MW] tenant OK → pass to handler")
 
+        emit_tg_event(
+            TG_MIDDLEWARE_EXIT,
+            middleware="tenant",
+            outcome="pass",
+            tenant_id=getattr(data.get("tenant"), "id", None),
+        )
         return await handler(event, data)

@@ -13,6 +13,7 @@ from app.bootstrap import (
     init_storage,
     start_bot_with_retry,
 )
+from app.bot.middlewares.tracing_middleware import HandlerTraceMiddleware, UpdateTraceMiddleware
 from app.core.config import settings
 from master_bot.routers_master import build_master_router
 from master_bot.notify import set_master_bot
@@ -77,6 +78,9 @@ async def main() -> None:
         redis_url=settings.redis_url,
     )
     dp = Dispatcher(storage=storage)
+    dp.update.outer_middleware(UpdateTraceMiddleware(bot_role="master_bot"))
+    dp.message.middleware(HandlerTraceMiddleware(bot_role="master_bot"))
+    dp.callback_query.middleware(HandlerTraceMiddleware(bot_role="master_bot"))
     dp.include_router(build_master_router())
 
     configure_event_loop()

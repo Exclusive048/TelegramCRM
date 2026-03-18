@@ -23,7 +23,7 @@ from .lead_callbacks_shared import (
     _parse_amount,
 )
 
-router = Router()
+router = Router(name="crm.lead_callbacks.force_reply")
 
 
 async def _run_post_commit_sync(

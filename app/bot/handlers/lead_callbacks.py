@@ -14,7 +14,7 @@ from .lead_callbacks_shared import (
 )
 from .lead_callbacks_status import router as status_router
 
-router = Router()
+router = Router(name="crm.lead_callbacks")
 router.include_router(status_router)
 router.include_router(notes_router)
 router.include_router(force_reply_router)

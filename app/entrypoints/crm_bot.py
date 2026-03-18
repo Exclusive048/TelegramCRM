@@ -16,6 +16,7 @@ from app.bootstrap import (
 )
 from app.bot.middlewares.sender_middleware import SenderMiddleware
 from app.bot.middlewares.tenant_middleware import TenantMiddleware
+from app.bot.middlewares.tracing_middleware import HandlerTraceMiddleware, UpdateTraceMiddleware
 from app.bot.routers_crm import build_crm_router
 from app.core.config import settings
 from app.services.reminder_service import ReminderService
@@ -61,7 +62,10 @@ async def main() -> None:
 
     dp = Dispatcher(storage=storage)
     dp["sender"] = sender
+    dp.update.outer_middleware(UpdateTraceMiddleware(bot_role="crm_bot"))
     dp.update.middleware(SenderMiddleware())
+    dp.message.middleware(HandlerTraceMiddleware(bot_role="crm_bot"))
+    dp.callback_query.middleware(HandlerTraceMiddleware(bot_role="crm_bot"))
     dp.message.outer_middleware(TenantMiddleware())
     dp.callback_query.outer_middleware(TenantMiddleware())
     dp.include_router(build_crm_router())

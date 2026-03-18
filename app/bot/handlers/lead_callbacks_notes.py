@@ -30,7 +30,7 @@ from .lead_callbacks_shared import (
     _parse_custom_datetime,
 )
 
-router = Router()
+router = Router(name="crm.lead_callbacks.notes")
 
 
 def _resolve_quick_reminder(choice: str) -> datetime | None:

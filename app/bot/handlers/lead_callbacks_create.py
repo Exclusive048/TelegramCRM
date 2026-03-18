@@ -31,7 +31,7 @@ from .lead_callbacks_shared import (
     _get_manager,
 )
 
-router = Router()
+router = Router(name="crm.lead_callbacks.create")
 
 _SKIP_WORDS = {"skip", "-", "пропустить"}
 _CANCEL_WORDS = {"/cancel", "cancel", "отмена"}

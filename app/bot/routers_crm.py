@@ -4,7 +4,7 @@ from app.bot.handlers import cabinet, cancel, lead_callbacks, panel, setup
 
 
 def build_crm_router() -> Router:
-    router = Router()
+    router = Router(name="crm.root")
     router.include_router(cancel.router)
     router.include_router(lead_callbacks.router)
     router.include_router(setup.router)

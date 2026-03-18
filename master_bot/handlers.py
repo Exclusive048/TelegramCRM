@@ -19,7 +19,7 @@ from app.db.repositories.lead_repository import LeadRepository
 from app.db.repositories.tenant_repository import TenantRepository
 from master_bot.notify import notify_admin
 
-router = Router()
+router = Router(name="master.main")
 
 
 class RegState(StatesGroup):
@@ -575,4 +575,3 @@ async def _send_activation_message(
             f"и напишите /setup — это займёт 1 минуту.",
             parse_mode="HTML",
         )
-

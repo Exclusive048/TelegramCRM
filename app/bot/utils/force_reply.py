@@ -7,6 +7,7 @@ from aiogram.types import CallbackQuery, Message, ForceReply
 from loguru import logger
 
 from app.bot.constants.ttl import TTL_INPUT_SEC
+from app.bot.diagnostics import log_guard_rejected
 from app.telegram.safe_sender import TelegramSafeSender
 
 _PROMPT_ID_KEY = "force_reply_prompt_id"
@@ -105,6 +106,12 @@ async def is_force_reply(message: Message, state: FSMContext) -> bool:
 async def reject_non_force_reply(message: Message, state: FSMContext, sender: TelegramSafeSender) -> bool:
     if await is_force_reply(message, state):
         return True
+    log_guard_rejected(
+        "force_reply_guard_failed",
+        chat_id=message.chat.id,
+        user_id=message.from_user.id if message.from_user else None,
+        message_id=message.message_id,
+    )
     try:
         await sender.delete_message(
             chat_id=message.chat.id,

@@ -32,7 +32,7 @@ from app.db.repositories.tenant_topics import TenantTopicRepository
 from app.telegram.html_utils import html_escape
 from app.telegram.safe_sender import TelegramSafeSender
 
-router = Router()
+router = Router(name="crm.cabinet")
 
 CABINET_HOME_TEXT = "🗂 <b>Кабинет</b>\n\nВыберите раздел."
 

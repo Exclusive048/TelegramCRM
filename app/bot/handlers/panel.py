@@ -6,6 +6,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 from loguru import logger
 
+from app.bot.diagnostics import log_guard_rejected
 from app.bot.topic_resolver import resolve_topic_thread_id
 from app.bot.topic_cache import invalidate as invalidate_topic_cache
 from app.bot.topics import TOPIC_SPECS, TopicKey
@@ -25,7 +26,7 @@ from app.db.repositories.tenant_repository import TenantRepository
 from app.db.repositories.tenant_topics import TenantTopicRepository
 from app.telegram.safe_sender import TelegramSafeSender
 
-router = Router()
+router = Router(name="crm.panel")
 
 
 def _get_topic_spec(key: TopicKey):
@@ -197,6 +198,7 @@ async def cmd_panel(message: Message, sender: TelegramSafeSender, tenant=None):
     """Восстанавливает пульт управления командой в текущем топике."""  # FIXED #11
     ctx = await resolve_admin_context(message, tenant, sender)
     if not ctx:
+        log_guard_rejected("panel_admin_context_missing")
         await sender.send_ephemeral_text(
             chat_id=message.chat.id,
             message_thread_id=message.message_thread_id,
@@ -207,6 +209,7 @@ async def cmd_panel(message: Message, sender: TelegramSafeSender, tenant=None):
 
     topic_id = message.message_thread_id
     if not topic_id:
+        log_guard_rejected("panel_topic_required", chat_id=message.chat.id)
         await sender.send_ephemeral_text(
             chat_id=message.chat.id,
             message_thread_id=None,
@@ -230,11 +233,13 @@ async def cmd_panel(message: Message, sender: TelegramSafeSender, tenant=None):
 async def handle_panel_actions(callback: CallbackQuery, state: FSMContext, sender: TelegramSafeSender, tenant=None):
     action = parse_panel_callback(callback.data)
     if not action:
+        log_guard_rejected("panel_callback_parse_failed", callback_data=callback.data)
         await sender.answer(callback)
         return
 
     ctx = await resolve_admin_context(callback, tenant, sender)
     if not ctx:
+        log_guard_rejected("panel_callback_admin_context_missing", callback_data=callback.data)
         await sender.answer(callback, "⛔ Нет доступа.", show_alert=True)
         return
     group_id, _ = ctx
@@ -248,6 +253,7 @@ async def handle_panel_actions(callback: CallbackQuery, state: FSMContext, sende
         repo = LeadRepository(session)
         resolved_tenant = await _resolve_panel_tenant(session, tenant, group_id)
         if resolved_tenant is None:
+            log_guard_rejected("panel_tenant_not_resolved", group_id=group_id)
             logger.warning(f"panel action rejected: tenant not resolved for group_id={group_id}")
             await sender.answer(callback, "⚠️ Не удалось определить tenant для этого чата.", show_alert=True)
             return
@@ -260,6 +266,7 @@ async def handle_panel_actions(callback: CallbackQuery, state: FSMContext, sende
             sender=None,
         ) or callback.message.message_thread_id  # FIXED #1
         if not topic_id:
+            log_guard_rejected("panel_topic_not_resolved", group_id=group_id)
             return
 
         if action in {"panel_home", "panel_team", "team_cancel"}:
@@ -309,6 +316,7 @@ async def handle_panel_actions(callback: CallbackQuery, state: FSMContext, sende
 async def handle_manager_contact(message: Message, state: FSMContext, sender: TelegramSafeSender, tenant=None):
     ctx = await resolve_admin_context(message, tenant, sender)
     if not ctx:
+        log_guard_rejected("panel_contact_admin_context_missing")
         return
     group_id, _ = ctx
 
@@ -321,6 +329,7 @@ async def handle_manager_contact(message: Message, state: FSMContext, sender: Te
         repo = LeadRepository(session)
         resolved_tenant = await _resolve_panel_tenant(session, tenant, group_id)
         if resolved_tenant is None:
+            log_guard_rejected("panel_contact_tenant_not_resolved", group_id=group_id)
             logger.warning(f"panel manager contact rejected: tenant not resolved for group_id={group_id}")
             await state.clear()
             return
@@ -335,6 +344,7 @@ async def handle_manager_contact(message: Message, state: FSMContext, sender: Te
                 thread_id=None,
             )
             if not panel_topic_id:
+                log_guard_rejected("panel_contact_topic_not_resolved", group_id=group_id)
                 return
 
         # Принимаем контакт ИЛИ пересланное сообщение

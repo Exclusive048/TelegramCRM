@@ -26,7 +26,7 @@ from .lead_callbacks_shared import (
     _manager_can_act,
 )
 
-router = Router()
+router = Router(name="crm.lead_callbacks.status")
 
 
 async def _run_post_commit_sync(

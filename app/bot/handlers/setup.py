@@ -8,6 +8,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from loguru import logger
 
 from app.bot.constants.ttl import TTL_ERROR_SEC, TTL_MENU_SEC
+from app.bot.diagnostics import log_guard_rejected
 from app.bot.handlers.panel import ensure_panel_message
 from app.bot.topic_cache import invalidate as invalidate_topic_cache
 from app.bot.topic_resolver import resolve_topic_thread_id
@@ -23,7 +24,7 @@ from app.db.repositories.tenant_topics import TenantTopicRepository
 from app.services.yukassa_service import _create_yukassa_payment
 from app.telegram.safe_sender import TelegramSafeSender
 
-router = Router()
+router = Router(name="crm.setup")
 
 
 class TenantRegistrationState(StatesGroup):
@@ -330,12 +331,14 @@ async def cmd_setup(message: Message, sender: TelegramSafeSender):
     chat_id = message.chat.id
 
     if message.from_user is None:
+        log_guard_rejected("setup_missing_user", flow="onboarding")
         return
 
     target_tenant: Tenant | None = None
     should_bind_tenant = False
 
     if not await is_tg_admin(sender, chat_id, message.from_user.id):
+        log_guard_rejected("setup_group_admin_required", flow="onboarding", chat_id=chat_id, user_id=message.from_user.id)
         await sender.send_ephemeral_text(
             chat_id=chat_id,
             message_thread_id=message.message_thread_id,
@@ -346,6 +349,7 @@ async def cmd_setup(message: Message, sender: TelegramSafeSender):
 
     chat = await sender.get_chat(chat_id)
     if not getattr(chat, "is_forum", False):
+        log_guard_rejected("setup_forum_required", flow="onboarding", chat_id=chat_id)
         await sender.send_ephemeral_text(
             chat_id=chat_id,
             message_thread_id=message.message_thread_id,
@@ -362,6 +366,7 @@ async def cmd_setup(message: Message, sender: TelegramSafeSender):
         target_tenant, selection_error = _select_setup_tenant(tenants, chat_id)
 
     if selection_error == "ambiguous_unbound":
+        log_guard_rejected("setup_ambiguous_unbound", flow="onboarding", chat_id=chat_id)
         await sender.send_ephemeral_text(
             chat_id=chat_id,
             message_thread_id=message.message_thread_id,
@@ -374,6 +379,7 @@ async def cmd_setup(message: Message, sender: TelegramSafeSender):
         return
 
     if selection_error == "conflict_same_group":
+        log_guard_rejected("setup_conflict_same_group", flow="onboarding", chat_id=chat_id)
         await sender.send_ephemeral_text(
             chat_id=chat_id,
             message_thread_id=message.message_thread_id,
@@ -386,6 +392,7 @@ async def cmd_setup(message: Message, sender: TelegramSafeSender):
         return
 
     if not target_tenant:
+        log_guard_rejected("setup_tenant_not_found", flow="onboarding", chat_id=chat_id)
         await sender.send_ephemeral_text(
             chat_id=chat_id,
             message_thread_id=message.message_thread_id,

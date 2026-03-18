@@ -8,6 +8,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import select, func, update
 
+from app.bot.diagnostics import log_guard_rejected
 from app.core.config import settings
 from app.bot.utils.callback_parser import safe_parse
 from app.db.database import AsyncSessionLocal
@@ -15,7 +16,7 @@ from app.db.models.tenant import Tenant
 from app.db.repositories.tenant_repository import TenantRepository
 from master_bot.notify import notify_tenant_owner
 
-router = Router()
+router = Router(name="master.admin")
 
 PAGE_SIZE = 8
 ADMIN_PENDING_TTL_HOURS = 24
@@ -24,7 +25,14 @@ ADMIN_PENDING_TTL_HOURS = 24
 # ── Проверка что это админ ─────────────────────────────────────────────────────
 
 def is_admin(user_id: int) -> bool:
-    return user_id == settings.master_admin_tg_id
+    allowed = user_id == settings.master_admin_tg_id
+    if not allowed:
+        log_guard_rejected(
+            "master_admin_required",
+            flow="master_admin",
+            user_id=user_id,
+        )
+    return allowed
 
 
 async def _set_admin_pending_message(admin_tg_id: int, tenant_id: int) -> None:
