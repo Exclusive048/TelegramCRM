@@ -278,11 +278,20 @@ class TenantRepository:
             if not existing:
                 break
 
+        management_api_key = await self._generate_unique_api_key()
+        api_key: str | None = None
+        if generate_api_key:
+            api_key = await self._generate_unique_api_key()
+            while api_key == management_api_key:
+                api_key = await self._generate_unique_api_key()
+
         tenant = Tenant(
             group_id=group_id,
             owner_tg_id=owner_tg_id,
             company_name=company_name,
             is_active=False,
+            api_key=api_key,
+            management_api_key=management_api_key,
             referral_code=code,
             referred_by_id=referred_by_id,
             sla_new_hours=settings.sla_new_hours,
@@ -290,9 +299,6 @@ class TenantRepository:
         )
         self.session.add(tenant)
         await self.session.flush()
-        if generate_api_key:
-            tenant.api_key = await self._ensure_api_key(tenant.id)
-            tenant.management_api_key = await self._ensure_management_api_key(tenant.id)
         return tenant
 
     async def create_tenant(
@@ -319,11 +325,7 @@ class TenantRepository:
         tenant = await self.get_by_id(tenant_id)
         if tenant.api_key:
             return tenant.api_key
-        while True:
-            key = secrets.token_urlsafe(32)
-            existing = await self.get_by_api_key_any(key)
-            if not existing:
-                break
+        key = await self._generate_unique_api_key()
         await self.session.execute(
             update(Tenant).where(Tenant.id == tenant_id).values(api_key=key)
         )
@@ -335,16 +337,19 @@ class TenantRepository:
         tenant = await self.get_by_id(tenant_id)
         if tenant.management_api_key:
             return tenant.management_api_key
-        while True:
-            key = secrets.token_urlsafe(32)
-            existing = await self.get_by_api_key_any(key)
-            if not existing:
-                break
+        key = await self._generate_unique_api_key()
         await self.session.execute(
             update(Tenant).where(Tenant.id == tenant_id).values(management_api_key=key)
         )
         await self.session.flush()
         return key
+
+    async def _generate_unique_api_key(self) -> str:
+        while True:
+            key = secrets.token_urlsafe(32)
+            existing = await self.get_by_api_key_any(key)
+            if not existing:
+                return key
 
     async def ensure_management_api_key(self, tenant_id: int) -> str:
         return await self._ensure_management_api_key(tenant_id)
@@ -524,4 +529,3 @@ class TenantRepository:
             select(Payment).where(Payment.id == updated_id)
         )
         return result.scalar_one_or_none()
-

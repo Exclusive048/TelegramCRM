@@ -10,6 +10,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from loguru import logger
 
+from app.bot.diagnostics import emit_tg_event
 from app.core.config import settings
 from app.bot.utils.callback_parser import safe_parse
 from app.db.database import AsyncSessionLocal
@@ -143,29 +144,47 @@ async def handle_company_name(message: Message, state: FSMContext):
     referred_code: str | None = data.get("referred_code")
     await state.clear()
 
-    async with AsyncSessionLocal() as session:
-        repo = TenantRepository(session)
-        referrer_id: int | None = None
-        if referred_code:
-            referrer = await repo.get_by_referral_code(referred_code)
-            if referrer:
-                referrer_id = referrer.id
-        tenant = await repo.create_tenant(
-            owner_tg_id=message.from_user.id,
+    try:
+        async with AsyncSessionLocal() as session:
+            repo = TenantRepository(session)
+            referrer_id: int | None = None
+            if referred_code:
+                referrer = await repo.get_by_referral_code(referred_code)
+                if referrer:
+                    referrer_id = referrer.id
+            tenant = await repo.create_tenant(
+                owner_tg_id=message.from_user.id,
+                company_name=name,
+                referred_by_id=referrer_id,
+            )
+            lead_repo = LeadRepository(session)
+            await lead_repo.upsert_manager_from_contact(
+                tg_id=message.from_user.id,
+                name=message.from_user.full_name,
+                username=message.from_user.username,
+                role=ManagerRole.ADMIN,
+                tenant_id=tenant.id,
+            )
+            tenants = await repo.get_tenants_by_owner(message.from_user.id)
+            await session.commit()
+            tenant_id = tenant.id
+    except Exception as exc:
+        emit_tg_event(
+            "tg_handler_failed",
+            level="ERROR",
+            flow="master_onboarding",
+            step="create_tenant",
+            error_type=type(exc).__name__,
             company_name=name,
-            referred_by_id=referrer_id,
+            owner_tg_id=message.from_user.id if message.from_user else None,
         )
-        lead_repo = LeadRepository(session)
-        await lead_repo.upsert_manager_from_contact(
-            tg_id=message.from_user.id,
-            name=message.from_user.full_name,
-            username=message.from_user.username,
-            role=ManagerRole.ADMIN,
-            tenant_id=tenant.id,
+        logger.exception(
+            "master_onboarding_create_failed owner_tg_id={} company_name={}",
+            message.from_user.id if message.from_user else None,
+            name,
         )
-        tenants = await repo.get_tenants_by_owner(message.from_user.id)
-        await session.commit()
-        tenant_id = tenant.id
+        await message.answer("⚠️ Не удалось создать CRM-аккаунт. Попробуйте ещё раз через /start.")
+        return
 
     await notify_admin(
         f"🆕 Новый клиент!\n"
