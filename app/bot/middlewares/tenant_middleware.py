@@ -12,6 +12,15 @@ from app.db.database import AsyncSessionLocal
 from app.db.repositories.tenant_repository import TenantRepository
 
 EXCLUDED_COMMANDS = {"/start", "/pay", "/help", "/setup"}
+SETUP_SELECTION_CALLBACK_PREFIX = "setup:select:"
+
+
+def _is_setup_selection_callback(event: TelegramObject) -> bool:
+    return (
+        isinstance(event, CallbackQuery)
+        and isinstance(event.data, str)
+        and event.data.startswith(SETUP_SELECTION_CALLBACK_PREFIX)
+    )
 
 
 class TenantMiddleware(BaseMiddleware):
@@ -22,6 +31,7 @@ class TenantMiddleware(BaseMiddleware):
         data: Dict[str, Any],
     ) -> Any:
         emit_tg_event(TG_MIDDLEWARE_ENTER, middleware="tenant")
+        is_setup_selection_callback = _is_setup_selection_callback(event)
 
         if isinstance(event, Message) and event.text:
             command = event.text.split()[0]
@@ -54,6 +64,16 @@ class TenantMiddleware(BaseMiddleware):
             repo = TenantRepository(session)
             tenant = await repo.get_by_group_id(chat_id)
             if not tenant:
+                if is_setup_selection_callback:
+                    emit_tg_event(
+                        TG_MIDDLEWARE_EXIT,
+                        middleware="tenant",
+                        outcome="skipped",
+                        skip_reason="setup_selection_callback_without_group_tenant",
+                        chat_id=chat_id,
+                    )
+                    return await handler(event, data)
+
                 log_guard_rejected("tenant_not_found", middleware="tenant", chat_id=chat_id)
                 emit_tg_event(
                     TG_MIDDLEWARE_EXIT,
