@@ -169,7 +169,7 @@ def _parse_tilda(data: dict) -> dict:
     """
     Универсальный парсер Tilda-форм.
     Поддерживает стандартные поля (Name/Phone) и нестандартные
-    (messenger-id, program, city Рё С‚.Рґ.).
+    (messenger-id, program, city и т.д.).
     """
     # ── Имя ───────────────────────────────────────────────────────────────────
     name = _pick(data, "Name", "name", "NAME", "ФИО", "fio", "fullname")
@@ -183,7 +183,7 @@ def _parse_tilda(data: dict) -> dict:
     if not name:
         name = _pick(data, "formname", "program", default="Заявка с сайта")
 
-    # ??????? / ???????
+    # Телефон / мессенджер
     phone = _pick(data, "Phone", "phone", "PHONE", "tel", "Tel", "telephone")
     if not phone:
         messenger_id = _pick(data, "messenger-id", "messenger_id")
@@ -192,9 +192,9 @@ def _parse_tilda(data: dict) -> dict:
             prefix = f"{messenger_type}: " if messenger_type else ""
             phone = f"{prefix}{messenger_id}"
     if not phone:
-        phone = _pick(data, "email", "Email", "EMAIL", default="вЂ”")
+        phone = _pick(data, "email", "Email", "EMAIL", default="—")
 
-    # в”Ђв”Ђ Email в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+    # ── Email ───────────────────────────────────────────────────────────────
     email = _pick(data, "email", "Email", "EMAIL") or None
 
     # ── Услуга ────────────────────────────────────────────────────────────────
@@ -228,7 +228,7 @@ def _parse_tilda(data: dict) -> dict:
 
     comment = " | ".join(comment_parts)
 
-    # в”Ђв”Ђ UTM в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+    # ── UTM ─────────────────────────────────────────────────────────────────
     utm_campaign = _pick(data, "utm_campaign", "UTM_CAMPAIGN") or None
     utm_source = _pick(data, "utm_source", "utm_medium") or None
 
@@ -501,7 +501,7 @@ async def tilda_webhook(
     return OkResponse()
 
 
-# в”Ђв”Ђ GET /leads в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+# ── GET /leads ──────────────────────────────────────────────────────────────
 
 @router.get("", response_model=LeadListResponse)
 async def get_leads(
@@ -539,7 +539,7 @@ async def get_leads(
     )
 
 
-# в”Ђв”Ђ GET /leads/{id} в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+# ── GET /leads/{id} ─────────────────────────────────────────────────────────
 
 @router.get("/{lead_id}", response_model=LeadResponse)
 async def get_lead(
@@ -557,7 +557,7 @@ async def get_lead(
     return LeadResponse.model_validate(lead)
 
 
-# в”Ђв”Ђ PATCH /leads/{id} в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+# ── PATCH /leads/{id} ───────────────────────────────────────────────────────
 
 @router.patch("/{lead_id}", response_model=OkResponse)
 async def update_lead(
@@ -622,7 +622,7 @@ async def update_lead(
 
     return OkResponse()
 
-# в”Ђв”Ђ POST /leads/{id}/comment в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+# ── POST /leads/{id}/comment ────────────────────────────────────────────────
 
 @router.post("/{lead_id}/comment", response_model=OkResponse, status_code=201)
 async def add_comment(

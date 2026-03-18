@@ -32,16 +32,16 @@ def _status_line(tenant: Tenant) -> str:
     icon = "✅" if tenant.is_active else "🔴"
     until = ""
     if tenant.subscription_until:
-        until = f" РґРѕ {tenant.subscription_until.strftime('%d.%m.%Y')}"
+        until = f" до {tenant.subscription_until.strftime('%d.%m.%Y')}"
     plan_map = {"trial": "Пробный", "base": "Базовый", "pro": "Про"}
-    plan = plan_map.get(tenant.plan, tenant.plan or "вЂ”")
-    return f"{icon} <b>{tenant.company_name}</b> вЂ” {plan}{until}"
+    plan = plan_map.get(tenant.plan, tenant.plan or "—")
+    return f"{icon} <b>{tenant.company_name}</b> — {plan}{until}"
 
 
 def _tenant_detail_text(tenant: Tenant) -> str:
     now = datetime.now(timezone.utc)
     status = "✅ Активна" if tenant.is_active else "🔴 Неактивна"
-    until = "вЂ”"
+    until = "—"
     days_left_str = ""
     if tenant.subscription_until:
         until = tenant.subscription_until.strftime("%d.%m.%Y")
@@ -51,7 +51,7 @@ def _tenant_detail_text(tenant: Tenant) -> str:
         "trial": "Пробный",
         "base": "Базовый 1500 руб/мес",
     }
-    plan = plan_map.get(tenant.plan, tenant.plan or "вЂ”")
+    plan = plan_map.get(tenant.plan, tenant.plan or "—")
     onboarding = "✅ Настроена" if tenant.onboarding_completed else "⚠️ Ожидает /setup"
     return (
         f"🏢 <b>{tenant.company_name}</b>\n"
@@ -310,7 +310,7 @@ async def cb_reg_trial(callback: CallbackQuery):
     await _send_activation_message(callback.message, tenant, api_key)
 
 
-# ?? ?????? ?????????????????????????????????????????????????????????????????????
+# ── Оплата подписки ──────────────────────────────────────────────────────────
 
 async def _process_payment(callback: CallbackQuery) -> None:
     parsed = safe_parse(callback.data, expected_parts=3, expected_types=(str, str, int))
