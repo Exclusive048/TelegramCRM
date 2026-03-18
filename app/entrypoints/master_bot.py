@@ -22,12 +22,16 @@ from master_bot.notify import set_master_bot
 async def _set_master_commands(bot: Bot) -> None:
     common_commands = [
         BotCommand(command="start", description="Мои CRM-аккаунты и управление"),
+        BotCommand(command="api_keys", description="Показать API ключи"),
+        BotCommand(command="referral", description="Реферальная программа"),
     ]
     await bot.set_my_commands(common_commands, scope=BotCommandScopeAllPrivateChats())
 
     if settings.master_admin_tg_id:
         admin_commands = [
             BotCommand(command="start", description="Открыть меню"),
+            BotCommand(command="api_keys", description="Показать API ключи"),
+            BotCommand(command="referral", description="Реферальная программа"),
             BotCommand(command="clients", description="Список клиентов (админ)"),
             BotCommand(command="stats", description="Статистика сервиса (админ)"),
         ]

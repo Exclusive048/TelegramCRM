@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from aiogram import F, Router
-from aiogram.filters import CommandObject, CommandStart
+from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, Message
@@ -91,6 +91,169 @@ def _account_keyboard(tenant: Tenant) -> InlineKeyboardBuilder:
     ))
     b.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="main:back"))
     return b
+
+
+def _back_to_account_markup(tenant_id: int):
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"acc:detail:{tenant_id}"))
+    return builder.as_markup()
+
+
+def _build_api_keys_text(tenant: Tenant) -> str:
+    domain = settings.public_domain or "YOUR_DOMAIN"
+    webhook_url = f"https://{domain}/api/v1/leads/tilda"
+    return (
+        f"🔑 <b>API ключи — {tenant.company_name}</b>\n\n"
+        f"<b>Ingest API key (X-API-Key):</b>\n"
+        f"<code>{tenant.api_key or '—'}</code>\n\n"
+        f"<b>Management API key (X-Management-API-Key):</b>\n"
+        f"<code>{tenant.management_api_key or '—'}</code>\n\n"
+        f"<b>Webhook URL для Tilda:</b>\n"
+        f"<code>{webhook_url}</code>\n\n"
+        "Ingest-запросы отправляйте только server-to-server с заголовком:\n"
+        "<code>X-API-Key: ВАШ_КЛЮЧ</code>\n\n"
+        "Management-запросы отправляйте с заголовком:\n"
+        "<code>X-Management-API-Key: ВАШ_КЛЮЧ</code>\n\n"
+        "⛔️ Никогда не вставляйте ingest API key в браузерный JS-код.\n"
+        "Используйте Tilda webhook (настройки Tilda) или ваш backend proxy."
+    )
+
+
+def _resolve_master_bot_username() -> str:
+    master_username = getattr(settings, "master_bot_username", None)
+    if master_username:
+        return master_username
+    return settings.crm_bot_username.replace("_bot", "_master_bot")
+
+
+def _build_referral_text(tenant: Tenant, stats: dict[str, int]) -> str:
+    ref_link = f"https://t.me/{_resolve_master_bot_username()}?start=ref_{tenant.referral_code}"
+    return (
+        f"👥 <b>Реферальная программа</b>\n\n"
+        f"За каждого друга который оплатит подписку — "
+        f"вы получаете <b>{settings.referral_bonus_days} дней бесплатно</b>.\n\n"
+        f"<b>Ваша реферальная ссылка:</b>\n"
+        f"<code>{ref_link}</code>\n\n"
+        f"📊 <b>Статистика:</b>\n"
+        f"Приглашено: {stats['total']}\n"
+        f"Оплатили: {stats['paid']}\n"
+        f"Бонус получено: {stats['bonus_days_earned']} дней\n\n"
+        "Поделитесь ссылкой — бонус начисляется автоматически при оплате друга."
+    )
+
+
+async def _get_owner_tenants(owner_tg_id: int) -> list[Tenant]:
+    async with AsyncSessionLocal() as session:
+        repo = TenantRepository(session)
+        return await repo.get_tenants_by_owner(owner_tg_id)
+
+
+async def _load_owned_tenant_for_keys(owner_tg_id: int, tenant_id: int) -> Tenant | None:
+    async with AsyncSessionLocal() as session:
+        repo = TenantRepository(session)
+        tenant = await repo.get_by_id(tenant_id)
+        if not tenant or tenant.owner_tg_id != owner_tg_id:
+            return None
+        if not tenant.management_api_key:
+            tenant.management_api_key = await repo.ensure_management_api_key(tenant_id)
+            await session.commit()
+            await session.refresh(tenant)
+        return tenant
+
+
+async def _load_owned_tenant_for_referral(
+    owner_tg_id: int,
+    tenant_id: int,
+) -> tuple[Tenant, dict[str, int]] | None:
+    async with AsyncSessionLocal() as session:
+        repo = TenantRepository(session)
+        tenant = await repo.get_by_id(tenant_id)
+        if not tenant or tenant.owner_tg_id != owner_tg_id:
+            return None
+        stats = await repo.get_referral_stats(tenant_id)
+    return tenant, stats
+
+
+def _build_tenant_feature_picker(tenants: list[Tenant], *, feature: str):
+    builder = InlineKeyboardBuilder()
+    callback_prefix = "acc:keys" if feature == "keys" else "acc:ref"
+    for tenant in tenants:
+        icon = "✅" if tenant.is_active else "🔴"
+        builder.row(
+            InlineKeyboardButton(
+                text=f"{icon} {tenant.company_name}",
+                callback_data=f"{callback_prefix}:{tenant.id}",
+            )
+        )
+    builder.row(InlineKeyboardButton(text="⬅️ К аккаунтам", callback_data="main:back"))
+    return builder.as_markup()
+
+
+async def _send_api_keys_view(message: Message, tenant: Tenant, tenant_id: int, *, edit: bool) -> None:
+    text = _build_api_keys_text(tenant)
+    reply_markup = _back_to_account_markup(tenant_id)
+    if edit:
+        await message.edit_text(text, reply_markup=reply_markup, parse_mode="HTML")
+        return
+    await message.answer(text, reply_markup=reply_markup, parse_mode="HTML")
+
+
+async def _send_referral_view(
+    message: Message,
+    tenant: Tenant,
+    stats: dict[str, int],
+    tenant_id: int,
+    *,
+    edit: bool,
+) -> None:
+    text = _build_referral_text(tenant, stats)
+    reply_markup = _back_to_account_markup(tenant_id)
+    if edit:
+        await message.edit_text(text, reply_markup=reply_markup, parse_mode="HTML")
+        return
+    await message.answer(text, reply_markup=reply_markup, parse_mode="HTML")
+
+
+async def _handle_account_feature_command(message: Message, *, feature: str) -> None:
+    if message.chat.type != "private" or message.from_user is None:
+        return
+
+    owner_tg_id = message.from_user.id
+    tenants = await _get_owner_tenants(owner_tg_id)
+    if not tenants:
+        await message.answer(
+            "❌ CRM-аккаунты не найдены.\n"
+            "Нажмите /start, чтобы зарегистрировать первый аккаунт."
+        )
+        return
+
+    if len(tenants) > 1:
+        prompt = (
+            "🔑 Выберите аккаунт, для которого показать API ключи:"
+            if feature == "keys"
+            else "👥 Выберите аккаунт, для которого показать реферальную программу:"
+        )
+        await message.answer(
+            prompt,
+            reply_markup=_build_tenant_feature_picker(tenants, feature=feature),
+        )
+        return
+
+    tenant_id = tenants[0].id
+    if feature == "keys":
+        tenant = await _load_owned_tenant_for_keys(owner_tg_id, tenant_id)
+        if not tenant:
+            await message.answer("⛔️ Аккаунт не найден. Попробуйте /start.")
+            return
+        await _send_api_keys_view(message, tenant, tenant_id, edit=False)
+        return
+
+    referral_payload = await _load_owned_tenant_for_referral(owner_tg_id, tenant_id)
+    if not referral_payload:
+        await message.answer("⛔️ Аккаунт не найден. Попробуйте /start.")
+        return
+    tenant, stats = referral_payload
+    await _send_referral_view(message, tenant, stats, tenant_id, edit=False)
 
 
 @router.message(CommandStart())
@@ -246,6 +409,18 @@ async def cb_main_new(callback: CallbackQuery, state: FSMContext):
     await state.set_state(RegState.waiting_for_name)
     # answer() а не edit_text() — иначе FSM не подхватит следующее сообщение
     await callback.message.answer("ℹ️ Введите название нового аккаунта CRM.")
+
+
+# ── Команды shortcuts ──────────────────────────────────────────────────────────
+
+@router.message(Command("api_keys"))
+async def cmd_api_keys(message: Message):
+    await _handle_account_feature_command(message, feature="keys")
+
+
+@router.message(Command("referral"))
+async def cmd_referral(message: Message):
+    await _handle_account_feature_command(message, feature="referral")
 
 
 # ── Карточка аккаунта ──────────────────────────────────────────────────────────
@@ -431,43 +606,12 @@ async def cb_acc_keys(callback: CallbackQuery):
         await callback.answer("⚠️ Некорректный callback.", show_alert=True)
         return
     _, _, tenant_id = parsed
-    async with AsyncSessionLocal() as session:
-        repo = TenantRepository(session)
-        tenant = await repo.get_by_id(tenant_id)
-        if not tenant or tenant.owner_tg_id != callback.from_user.id:
-            await callback.answer("⛔️ Не найдено.", show_alert=True)
-            return
-        if not tenant.management_api_key:
-            tenant.management_api_key = await repo.ensure_management_api_key(tenant_id)
-            await session.commit()
-            await session.refresh(tenant)
+    tenant = await _load_owned_tenant_for_keys(callback.from_user.id, tenant_id)
+    if not tenant:
+        await callback.answer("⛔️ Не найдено.", show_alert=True)
+        return
     await callback.answer()
-
-    domain = settings.public_domain or "YOUR_DOMAIN"
-    webhook_url = f"https://{domain}/api/v1/leads/tilda"
-
-    builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(
-        text="⬅️ Назад", callback_data=f"acc:detail:{tenant_id}"
-    ))
-
-    await callback.message.edit_text(
-        f"🔑 <b>API ключи — {tenant.company_name}</b>\n\n"
-        f"<b>Ingest API key (X-API-Key):</b>\n"
-        f"<code>{tenant.api_key or '—'}</code>\n\n"
-        f"<b>Management API key (X-Management-API-Key):</b>\n"
-        f"<code>{tenant.management_api_key or '—'}</code>\n\n"
-        f"<b>Webhook URL для Tilda:</b>\n"
-        f"<code>{webhook_url}</code>\n\n"
-        "Ingest-запросы отправляйте только server-to-server с заголовком:\n"
-        "<code>X-API-Key: ВАШ_КЛЮЧ</code>\n\n"
-        "Management-запросы отправляйте с заголовком:\n"
-        "<code>X-Management-API-Key: ВАШ_КЛЮЧ</code>\n\n"
-        "⛔️ Никогда не вставляйте ingest API key в браузерный JS-код.\n"
-        "Используйте Tilda webhook (настройки Tilda) или ваш backend proxy.",
-        reply_markup=builder.as_markup(),
-        parse_mode="HTML",
-    )
+    await _send_api_keys_view(callback.message, tenant, tenant_id, edit=True)
 
 @router.callback_query(F.data.startswith("acc:ref:"))
 async def cb_acc_ref(callback: CallbackQuery):
@@ -476,40 +620,13 @@ async def cb_acc_ref(callback: CallbackQuery):
         await callback.answer("⚠️ Некорректный callback.", show_alert=True)
         return
     _, _, tenant_id = parsed
-    async with AsyncSessionLocal() as session:
-        repo = TenantRepository(session)
-        tenant = await repo.get_by_id(tenant_id)
-        if not tenant or tenant.owner_tg_id != callback.from_user.id:
-            await callback.answer("⛔️ Не найдено.", show_alert=True)
-            return
-        stats = await repo.get_referral_stats(tenant_id)
-
-    # Используем master_bot_username из ENV если есть, иначе подбираем из crm_bot_username
-    master_username = getattr(settings, "master_bot_username", None)
-    if not master_username:
-        master_username = settings.crm_bot_username.replace("_bot", "_master_bot")
-    ref_link = f"https://t.me/{master_username}?start=ref_{tenant.referral_code}"
-
-    builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(
-        text="⬅️ Назад", callback_data=f"acc:detail:{tenant_id}"
-    ))
-
+    referral_payload = await _load_owned_tenant_for_referral(callback.from_user.id, tenant_id)
+    if not referral_payload:
+        await callback.answer("⛔️ Не найдено.", show_alert=True)
+        return
+    tenant, stats = referral_payload
     await callback.answer()
-    await callback.message.edit_text(
-        f"👥 <b>Реферальная программа</b>\n\n"
-        f"За каждого друга который оплатит подписку — "
-        f"вы получаете <b>{settings.referral_bonus_days} дней бесплатно</b>.\n\n"
-        f"<b>Ваша реферальная ссылка:</b>\n"
-        f"<code>{ref_link}</code>\n\n"
-        f"📊 <b>Статистика:</b>\n"
-        f"Приглашено: {stats['total']}\n"
-        f"\u041e\u043f\u043b\u0430\u0442\u0438\u043b\u0438: {stats['paid']}\n"
-        f"Бонус получено: {stats['bonus_days_earned']} дней\n\n"
-        "Поделитесь ссылкой — бонус начисляется автоматически при оплате друга.",
-        reply_markup=builder.as_markup(),
-        parse_mode="HTML",
-    )
+    await _send_referral_view(callback.message, tenant, stats, tenant_id, edit=True)
 
 
 # ── Инструкция после активации ─────────────────────────────────────────────────
