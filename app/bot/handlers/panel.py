@@ -237,6 +237,10 @@ async def handle_panel_actions(callback: CallbackQuery, state: FSMContext, sende
         await sender.answer(callback)
         return
 
+    if callback.message is None:
+        log_guard_rejected("panel_callback_message_missing", callback_data=callback.data)
+        await sender.answer(callback)
+        return
     ctx = await resolve_admin_context(callback, tenant, sender)
     if not ctx:
         log_guard_rejected("panel_callback_admin_context_missing", callback_data=callback.data)
@@ -293,6 +297,7 @@ async def handle_panel_actions(callback: CallbackQuery, state: FSMContext, sende
             text = render_panel_team(managers)
             keyboard = build_kb_panel_team(managers)
         else:
+            log_guard_rejected("panel_action_unknown", action=action, callback_data=callback.data)
             await sender.answer(callback)
             return
 
