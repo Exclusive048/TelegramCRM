@@ -15,6 +15,7 @@ from sqlalchemy import (
 )
 from sqlalchemy import Index
 from sqlalchemy import Enum as SAEnum
+from sqlalchemy.dialects.postgresql import ENUM as PGEnum
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
@@ -54,6 +55,14 @@ def pg_enum(enum_cls: type[enum.Enum], *, name: str) -> SAEnum:
 
 # Reuse the same ENUM objects across all columns to avoid inconsistencies.
 LeadStatusEnum = pg_enum(LeadStatus, name="leadstatus")
+LeadStatusExistingPgEnum = PGEnum(
+    LeadStatus,
+    name="leadstatus",
+    native_enum=True,
+    create_type=False,
+    validate_strings=True,
+    values_callable=lambda cls: [e.value for e in cls],
+)
 ManagerRoleEnum = pg_enum(ManagerRole, name="managerrole")
 
 
@@ -188,7 +197,7 @@ class LeadArchive(Base):
     lead_created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     lead_closed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     final_status: Mapped[LeadStatus] = mapped_column(
-        LeadStatusEnum,
+        LeadStatusExistingPgEnum,
         nullable=False,
     )
 

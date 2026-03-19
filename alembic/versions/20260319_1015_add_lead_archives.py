@@ -7,6 +7,7 @@ Create Date: 2026-03-19 10:15:00.000000
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 
 
 # revision identifiers, used by Alembic.
@@ -17,7 +18,7 @@ depends_on = None
 
 
 def upgrade() -> None:
-    lead_status_enum = sa.Enum(
+    lead_status_enum = postgresql.ENUM(
         "new",
         "in_progress",
         "paid",
