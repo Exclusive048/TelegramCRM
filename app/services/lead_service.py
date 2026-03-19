@@ -237,6 +237,15 @@ class LeadService:
         if not lead:
             return None
 
+        if transition in {"success", "reject"}:
+            archived = await self.repo.archive_lead_snapshot_if_final_scoped(
+                lead.id,
+                tenant_id=tenant_id,
+            )
+            logger.info(
+                f"lead_archive_retry lead_id={lead.id} tenant_id={tenant_id} transition={transition} archived={archived}"
+            )
+
         if transition in {"take", "paid", "success", "reject"}:
             await self._move_card(lead=lead, action=transition)
             active = await self.repo.get_active_card_message(lead.id)

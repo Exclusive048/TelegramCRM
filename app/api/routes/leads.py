@@ -1,8 +1,10 @@
+import csv
+import io
 from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,6 +15,9 @@ from app.api.deps import (
     verify_management_api_key,
 )
 from app.api.schemas.lead_schemas import (
+    ArchiveLeadListResponse,
+    ArchiveLeadResponse,
+    ArchiveStatusAnalyticsResponse,
     CreateLeadResponse,
     LeadCommentRequest,
     LeadCreateRequest,
@@ -540,6 +545,130 @@ async def get_leads(
 
 
 # ── GET /leads/{id} ─────────────────────────────────────────────────────────
+
+@router.get("/archive/report", response_model=ArchiveLeadListResponse)
+async def get_archive_report(
+    request: Request,
+    date_from: datetime | None = Query(None),
+    date_to: datetime | None = Query(None),
+    page: int = Query(1, ge=1),
+    per_page: int = Query(1000, ge=1, le=10000),
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(verify_management_api_key),
+):
+    tenant = request.state.tenant
+    tenant_id = tenant.id if tenant else None
+    repo = LeadRepository(db)
+    archived, total = await repo.get_archive_report_scoped(
+        date_from=date_from,
+        date_to=date_to,
+        page=page,
+        per_page=per_page,
+        tenant_id=tenant_id,
+    )
+    return ArchiveLeadListResponse(
+        total=total,
+        page=page,
+        per_page=per_page,
+        data=[ArchiveLeadResponse.model_validate(item) for item in archived],
+    )
+
+
+@router.get("/archive/report.csv")
+async def get_archive_report_csv(
+    request: Request,
+    date_from: datetime | None = Query(None),
+    date_to: datetime | None = Query(None),
+    per_page: int = Query(10000, ge=1, le=50000),
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(verify_management_api_key),
+):
+    tenant = request.state.tenant
+    tenant_id = tenant.id if tenant else None
+    repo = LeadRepository(db)
+    archived, total = await repo.get_archive_report_scoped(
+        date_from=date_from,
+        date_to=date_to,
+        page=1,
+        per_page=per_page,
+        tenant_id=tenant_id,
+    )
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(
+        [
+            "source_lead_id",
+            "lead_created_at",
+            "lead_closed_at",
+            "final_status",
+            "archived_at",
+            "source",
+            "service",
+            "amount",
+            "manager_id",
+            "name",
+            "phone",
+            "email",
+            "utm_campaign",
+            "utm_source",
+            "reject_reason",
+            "tg_chat_id",
+            "tg_topic_id",
+            "tg_message_id",
+        ]
+    )
+    for item in archived:
+        writer.writerow(
+            [
+                item.source_lead_id,
+                item.lead_created_at.isoformat(sep=" ") if item.lead_created_at else "",
+                item.lead_closed_at.isoformat(sep=" ") if item.lead_closed_at else "",
+                item.final_status.value if isinstance(item.final_status, LeadStatus) else str(item.final_status),
+                item.archived_at.isoformat(sep=" ") if item.archived_at else "",
+                item.source,
+                item.service or "",
+                float(item.amount) if item.amount is not None else "",
+                item.manager_id or "",
+                item.name,
+                item.phone,
+                item.email or "",
+                item.utm_campaign or "",
+                item.utm_source or "",
+                item.reject_reason or "",
+                item.tg_chat_id or "",
+                item.tg_topic_id or "",
+                item.tg_message_id or "",
+            ]
+        )
+    csv_body = output.getvalue()
+    output.close()
+    filename = f"archive_report_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{total}.csv"
+    headers = {"Content-Disposition": f'attachment; filename=\"{filename}\"'}
+    return Response(content=csv_body, media_type="text/csv; charset=utf-8", headers=headers)
+
+
+@router.get("/archive/analytics", response_model=ArchiveStatusAnalyticsResponse)
+async def get_archive_analytics(
+    request: Request,
+    date_from: datetime | None = Query(None),
+    date_to: datetime | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(verify_management_api_key),
+):
+    tenant = request.state.tenant
+    tenant_id = tenant.id if tenant else None
+    repo = LeadRepository(db)
+    by_status = await repo.get_archive_status_analytics_scoped(
+        date_from=date_from,
+        date_to=date_to,
+        tenant_id=tenant_id,
+    )
+    return ArchiveStatusAnalyticsResponse(
+        total=sum(by_status.values()),
+        by_status=by_status,
+    )
+
 
 @router.get("/{lead_id}", response_model=LeadResponse)
 async def get_lead(

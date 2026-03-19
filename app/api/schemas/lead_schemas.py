@@ -66,6 +66,41 @@ class LeadListResponse(BaseModel):
     data:     list[LeadResponse]
 
 
+class ArchiveLeadResponse(BaseModel):
+    source_lead_id: int
+    tenant_id: int | None
+    lead_created_at: datetime
+    lead_closed_at: datetime | None
+    final_status: LeadStatus
+    archived_at: datetime
+    source: str
+    service: str | None
+    amount: float | None
+    manager_id: int | None
+    name: str
+    phone: str
+    email: str | None
+    utm_campaign: str | None
+    utm_source: str | None
+    reject_reason: str | None
+    tg_chat_id: int | None
+    tg_topic_id: int | None
+    tg_message_id: int | None
+    model_config = {"from_attributes": True}
+
+
+class ArchiveLeadListResponse(BaseModel):
+    total: int
+    page: int
+    per_page: int
+    data: list[ArchiveLeadResponse]
+
+
+class ArchiveStatusAnalyticsResponse(BaseModel):
+    total: int
+    by_status: dict[str, int]
+
+
 class CreateLeadResponse(BaseModel):
     status:        str = "ok"
     lead_id:       int

@@ -37,6 +37,15 @@ def test_repository_tenant_scoped_methods_reject_none_tenant() -> None:
     with pytest.raises(ValueError, match="get_list_scoped"):
         asyncio.run(repo.get_list_scoped(tenant_id=None))
 
+    with pytest.raises(ValueError, match="get_archive_report_scoped"):
+        asyncio.run(repo.get_archive_report_scoped(tenant_id=None))
+
+    with pytest.raises(ValueError, match="get_archive_status_analytics_scoped"):
+        asyncio.run(repo.get_archive_status_analytics_scoped(tenant_id=None))
+
+    with pytest.raises(ValueError, match="archive_lead_snapshot_if_final_scoped"):
+        asyncio.run(repo.archive_lead_snapshot_if_final_scoped(lead_id=1, tenant_id=None))
+
 
 def test_is_any_manager_uses_explicit_global_lookup() -> None:
     class _Repo:

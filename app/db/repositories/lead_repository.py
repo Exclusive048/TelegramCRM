@@ -1,9 +1,11 @@
 from datetime import datetime, timedelta, timezone
+from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, func
 from sqlalchemy.orm import selectinload
 from app.db.models.lead import (
     Lead,
+    LeadArchive,
     LeadStatus,
     LeadHistory,
     LeadComment,
@@ -23,6 +25,8 @@ class LeadRepository:
     def __init__(self, session: AsyncSession):
         self.session = session
 
+    _FINAL_ARCHIVE_STATUSES = frozenset({LeadStatus.SUCCESS, LeadStatus.REJECTED})
+
     @staticmethod
     def _require_tenant_scope(tenant_id: int | None, *, operation: str) -> int:
         if tenant_id is None:
@@ -30,6 +34,20 @@ class LeadRepository:
                 f"{operation} requires tenant_id to avoid cross-tenant fail-open access"
             )
         return tenant_id
+
+    @staticmethod
+    def _serialize_datetime(value: datetime | None) -> str | None:
+        if value is None:
+            return None
+        return _naive(value).isoformat(sep=" ")
+
+    @staticmethod
+    def _status_to_value(status: LeadStatus | str | None) -> str | None:
+        if status is None:
+            return None
+        if isinstance(status, LeadStatus):
+            return status.value
+        return str(status)
 
     # ── Создание ──────────────────────────────────────
 
@@ -128,6 +146,283 @@ class LeadRepository:
 
     # ── Обновление ────────────────────────────────────
 
+    def _build_archive_status_history(self, lead: Lead) -> list[dict[str, int | str | None]]:
+        events: list[dict[str, int | str | None]] = [
+            {
+                "from_status": None,
+                "to_status": self._status_to_value(LeadStatus.NEW),
+                "manager_id": lead.manager_id,
+                "comment": "lead_created",
+                "created_at": self._serialize_datetime(lead.created_at),
+            }
+        ]
+        ordered_history = sorted(
+            lead.history,
+            key=lambda item: item.created_at or datetime.min,
+        )
+        for item in ordered_history:
+            events.append(
+                {
+                    "from_status": self._status_to_value(item.from_status),
+                    "to_status": self._status_to_value(item.to_status),
+                    "manager_id": item.manager_id,
+                    "comment": item.comment,
+                    "created_at": self._serialize_datetime(item.created_at),
+                }
+            )
+        return events
+
+    def _build_archive_snapshot(
+        self,
+        lead: Lead,
+        *,
+        status_history: list[dict[str, int | str | None]],
+        tg_chat_id: int | None,
+    ) -> dict:
+        return {
+            "lead_id": lead.id,
+            "tenant_id": lead.tenant_id,
+            "status": self._status_to_value(lead.status),
+            "name": lead.name,
+            "phone": lead.phone,
+            "email": lead.email,
+            "source": lead.source,
+            "service": lead.service,
+            "comment": lead.comment or "",
+            "amount": float(lead.amount) if lead.amount is not None else None,
+            "manager_id": lead.manager_id,
+            "reject_reason": lead.reject_reason,
+            "utm_campaign": lead.utm_campaign,
+            "utm_source": lead.utm_source,
+            "extra": lead.extra,
+            "tg_chat_id": tg_chat_id,
+            "tg_topic_id": lead.tg_topic_id,
+            "tg_message_id": lead.tg_message_id,
+            "created_at": self._serialize_datetime(lead.created_at),
+            "closed_at": self._serialize_datetime(lead.closed_at),
+            "history": status_history,
+        }
+
+    async def _resolve_archive_chat_context(self, lead_id: int) -> int | None:
+        context_result = await self.session.execute(
+            select(LeadCardMessage.chat_id)
+            .where(LeadCardMessage.lead_id == lead_id)
+            .order_by(
+                LeadCardMessage.is_active.desc(),
+                LeadCardMessage.created_at.desc(),
+            )
+            .limit(1)
+        )
+        return context_result.scalar_one_or_none()
+
+    async def archive_lead_snapshot_if_final(
+        self,
+        lead_id: int,
+        *,
+        tenant_id: int | None = None,
+    ) -> bool:
+        lead = await self.get_by_id(lead_id, tenant_id=tenant_id)
+        if not lead:
+            return False
+        if lead.status not in self._FINAL_ARCHIVE_STATUSES:
+            return False
+
+        try:
+            async with self.session.begin_nested():
+                status_history = self._build_archive_status_history(lead)
+                tg_chat_id = await self._resolve_archive_chat_context(lead.id)
+                existing_result = await self.session.execute(
+                    select(LeadArchive).where(LeadArchive.source_lead_id == lead.id)
+                )
+                archive = existing_result.scalar_one_or_none()
+                if archive is None:
+                    archive = LeadArchive(
+                        source_lead_id=lead.id,
+                        tenant_id=lead.tenant_id,
+                        tg_chat_id=tg_chat_id,
+                        tg_topic_id=lead.tg_topic_id,
+                        tg_message_id=lead.tg_message_id,
+                        name=lead.name,
+                        phone=lead.phone,
+                        email=lead.email,
+                        source=lead.source,
+                        service=lead.service,
+                        comment=lead.comment or "",
+                        amount=lead.amount,
+                        manager_id=lead.manager_id,
+                        reject_reason=lead.reject_reason,
+                        utm_campaign=lead.utm_campaign,
+                        utm_source=lead.utm_source,
+                        extra=lead.extra,
+                        lead_created_at=_naive(lead.created_at),
+                        lead_closed_at=_naive(lead.closed_at),
+                        final_status=lead.status,
+                        status_history=status_history,
+                        snapshot=self._build_archive_snapshot(
+                            lead,
+                            status_history=status_history,
+                            tg_chat_id=tg_chat_id,
+                        ),
+                    )
+                    self.session.add(archive)
+                else:
+                    archive.tenant_id = lead.tenant_id
+                    archive.tg_chat_id = tg_chat_id
+                    archive.tg_topic_id = lead.tg_topic_id
+                    archive.tg_message_id = lead.tg_message_id
+                    archive.name = lead.name
+                    archive.phone = lead.phone
+                    archive.email = lead.email
+                    archive.source = lead.source
+                    archive.service = lead.service
+                    archive.comment = lead.comment or ""
+                    archive.amount = lead.amount
+                    archive.manager_id = lead.manager_id
+                    archive.reject_reason = lead.reject_reason
+                    archive.utm_campaign = lead.utm_campaign
+                    archive.utm_source = lead.utm_source
+                    archive.extra = lead.extra
+                    archive.lead_created_at = _naive(lead.created_at)
+                    archive.lead_closed_at = _naive(lead.closed_at)
+                    archive.final_status = lead.status
+                    archive.status_history = status_history
+                    archive.snapshot = self._build_archive_snapshot(
+                        lead,
+                        status_history=status_history,
+                        tg_chat_id=tg_chat_id,
+                    )
+                await self.session.flush()
+            logger.info(
+                "lead_archive_upserted lead_id={} tenant_id={} final_status={} history_events={}",
+                lead.id,
+                lead.tenant_id,
+                self._status_to_value(lead.status),
+                len(status_history),
+            )
+            return True
+        except Exception:
+            logger.exception(
+                "lead_archive_upsert_failed lead_id={} tenant_id={} final_status={}",
+                lead.id,
+                lead.tenant_id,
+                self._status_to_value(lead.status),
+            )
+            return False
+
+    async def archive_lead_snapshot_if_final_scoped(
+        self,
+        lead_id: int,
+        *,
+        tenant_id: int | None,
+    ) -> bool:
+        scoped_tenant_id = self._require_tenant_scope(
+            tenant_id,
+            operation="archive_lead_snapshot_if_final_scoped",
+        )
+        return await self.archive_lead_snapshot_if_final(
+            lead_id,
+            tenant_id=scoped_tenant_id,
+        )
+
+    async def get_archive_report(
+        self,
+        *,
+        date_from: datetime | None = None,
+        date_to: datetime | None = None,
+        page: int = 1,
+        per_page: int = 1000,
+        tenant_id: int | None = None,
+    ) -> tuple[list[LeadArchive], int]:
+        period_from, period_to = _naive(date_from), _naive(date_to)
+        period_column = func.coalesce(LeadArchive.lead_closed_at, LeadArchive.archived_at)
+        query = select(LeadArchive)
+        if tenant_id is not None:
+            query = query.where(LeadArchive.tenant_id == tenant_id)
+        if period_from:
+            query = query.where(period_column >= period_from)
+        if period_to:
+            query = query.where(period_column <= period_to)
+
+        count_result = await self.session.execute(
+            select(func.count()).select_from(query.subquery())
+        )
+        total = int(count_result.scalar() or 0)
+
+        rows_result = await self.session.execute(
+            query.order_by(LeadArchive.lead_closed_at.desc(), LeadArchive.id.desc())
+            .offset((page - 1) * per_page)
+            .limit(per_page)
+        )
+        return rows_result.scalars().all(), total
+
+    async def get_archive_report_scoped(
+        self,
+        *,
+        date_from: datetime | None = None,
+        date_to: datetime | None = None,
+        page: int = 1,
+        per_page: int = 1000,
+        tenant_id: int | None,
+    ) -> tuple[list[LeadArchive], int]:
+        scoped_tenant_id = self._require_tenant_scope(
+            tenant_id,
+            operation="get_archive_report_scoped",
+        )
+        return await self.get_archive_report(
+            date_from=date_from,
+            date_to=date_to,
+            page=page,
+            per_page=per_page,
+            tenant_id=scoped_tenant_id,
+        )
+
+    async def get_archive_status_analytics(
+        self,
+        *,
+        date_from: datetime | None = None,
+        date_to: datetime | None = None,
+        tenant_id: int | None = None,
+    ) -> dict[str, int]:
+        period_from, period_to = _naive(date_from), _naive(date_to)
+        period_column = func.coalesce(LeadArchive.lead_closed_at, LeadArchive.archived_at)
+        query = select(LeadArchive.final_status, func.count()).select_from(LeadArchive)
+        if tenant_id is not None:
+            query = query.where(LeadArchive.tenant_id == tenant_id)
+        if period_from:
+            query = query.where(period_column >= period_from)
+        if period_to:
+            query = query.where(period_column <= period_to)
+        query = query.group_by(LeadArchive.final_status)
+
+        rows = (await self.session.execute(query)).all()
+        by_status = {
+            LeadStatus.SUCCESS.value: 0,
+            LeadStatus.REJECTED.value: 0,
+        }
+        for status, count in rows:
+            key = self._status_to_value(status)
+            if key is None:
+                continue
+            by_status[key] = int(count)
+        return by_status
+
+    async def get_archive_status_analytics_scoped(
+        self,
+        *,
+        date_from: datetime | None = None,
+        date_to: datetime | None = None,
+        tenant_id: int | None,
+    ) -> dict[str, int]:
+        scoped_tenant_id = self._require_tenant_scope(
+            tenant_id,
+            operation="get_archive_status_analytics_scoped",
+        )
+        return await self.get_archive_status_analytics(
+            date_from=date_from,
+            date_to=date_to,
+            tenant_id=scoped_tenant_id,
+        )
+
     async def update_status(
         self,
         lead_id: int,
@@ -157,6 +452,11 @@ class LeadRepository:
             comment=comment,
         ))
         await self.session.flush()
+        if new_status in self._FINAL_ARCHIVE_STATUSES:
+            await self.archive_lead_snapshot_if_final(
+                lead_id,
+                tenant_id=lead.tenant_id,
+            )
         return lead
 
     async def try_take_lead(self, lead_id: int, manager_id: int | None) -> Lead | None:
@@ -249,6 +549,7 @@ class LeadRepository:
             comment="\u0417\u0430\u0432\u0435\u0440\u0448\u0435\u043d\u043e",
         ))
         await self.session.flush()
+        await self.archive_lead_snapshot_if_final(updated_id)
         return await self.get_by_id(lead_id)
 
     async def reject_lead(
@@ -293,6 +594,7 @@ class LeadRepository:
             comment=comment,
         ))
         await self.session.flush()
+        await self.archive_lead_snapshot_if_final(updated_id)
         return await self.get_by_id(lead_id)
 
     async def set_tg_message(self, lead_id: int, message_id: int | None, topic_id: int | None):

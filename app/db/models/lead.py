@@ -154,6 +154,60 @@ class Lead(Base):
     )
 
 
+class LeadArchive(Base):
+    __tablename__ = "lead_archives"
+    __table_args__ = (
+        UniqueConstraint("source_lead_id", name="uq_lead_archives_source_lead_id"),
+        Index("ix_lead_archives_tenant_id", "tenant_id"),
+        Index("ix_lead_archives_lead_closed_at", "lead_closed_at"),
+        Index("ix_lead_archives_final_status", "final_status"),
+        Index("ix_lead_archives_archived_at", "archived_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    source_lead_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    tenant_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    tg_chat_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    tg_topic_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    tg_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    phone: Mapped[str] = mapped_column(String(50), nullable=False)
+    email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    source: Mapped[str] = mapped_column(String(100), nullable=False)
+    service: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    comment: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    amount: Mapped[float | None] = mapped_column(Numeric(10, 2), nullable=True)
+    manager_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reject_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    utm_campaign: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    utm_source: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    extra: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+    lead_created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    lead_closed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    final_status: Mapped[LeadStatus] = mapped_column(
+        LeadStatusEnum,
+        nullable=False,
+    )
+
+    status_history: Mapped[list[dict]] = mapped_column(JSON, nullable=False, default=list)
+    snapshot: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+
+    archived_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        server_default=func.now(),
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+
 class LeadCardMessage(Base):
     __tablename__ = "lead_card_messages"
 
